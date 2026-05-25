@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta http-equiv="refresh" content="60">
+    <title>PautaLimpa Preview</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+    <main class="shell">
+        <header class="hero">
+            <div>
+                <p class="eyebrow">PautaLimpa</p>
+                <h2>Prévia editorial dos posts</h2>
+            </div>
+        </header>
+
+        <section class="toolbar">
+            <form method="get" class="filters">
+                <label>
+                    Status
+                    <select name="status">
+                        {% for value, label in [
+                            ('TODOS', 'Todos'),
+                            ('AGUARDANDO_IA', 'Aguardando IA'),
+                            ('AGUARDANDO_MIDIA', 'Texto gerado'),
+                            ('QUARENTENA', 'Quarentena'),
+                            ('ERRO_CAPTURA', 'Erro captura')
+                        ] %}
+                            <option value="{{ value }}" {% if selected_status == value %}selected{% endif %}>{{ label }}</option>
+                        {% endfor %}
+                    </select>
+                </label>
+                <label>
+                    Limite
+                    <input type="number" name="limit" min="1" max="200" value="{{ limit }}">
+                </label>
+                <button type="submit">Atualizar</button>
+            </form>
+        </section>
+
+        {% if not groups %}
+            <section class="empty">
+                <h2>Nenhum item encontrado</h2>
+                <p>Rode <code>python -m ingestion.extractor</code> e depois <code>python -m processing.llm_client</code>.</p>
+            </section>
+        {% endif %}
+
+        {% for date_label, items in groups.items() %}
+            <section class="date-group">
+                <div class="date-heading">
+                    <h2>{{ date_label }}</h2>
+                    <span>{{ items|length }} item(ns)</span>
+                </div>
+
+                <div class="grid">
+                    {% for item in items %}
+                        <article class="card">
+                            <div class="card-top">
+                                <div>
+                                    <p class="law-id">{{ item.title }}</p>
+                                    <h3>{{ item.ementa }}</h3>
+                                </div>
+                                <span class="badge {{ item.status_processamento|lower }}">{{ item.status_processamento }}</span>
+                            </div>
+
+                            <div class="meta-row">
+                                <span>DB #{{ item.id }}</span>
+                                <span>Origem {{ item.id_origem }}</span>
+                                <span>{{ item.modelo_llm }}</span>
+                                <span>{{ item.tokens }} tokens</span>
+                            </div>
+
+                            <div class="columns">
+                                <section class="panel source">
+                                    <p class="panel-label">Ementa original</p>
+                                    <p>{{ item.ementa }}</p>
+                                </section>
+                                <section class="panel caption">
+                                    <p class="panel-label">Texto editorial</p>
+                                    <pre>{{ item.caption }}</pre>
+                                    <div class="caption-footer">
+                                        <span>{{ item.caption_chars }} / 2.200 caracteres</span>
+                                        <span>Status IA: {{ item.status_ia }}</span>
+                                    </div>
+                                </section>
+                            </div>
+
+                            <footer class="card-footer">
+                                <span>Data da ementa: {{ item.data_apresentacao }}</span>
+                                <span>Capturado em: {{ item.data_captura }}</span>
+                                <span>Texto gerado em: {{ item.data_processamento }}</span>
+                                <div class="links">
+                                    {% if item.link_oficial %}<a href="{{ item.link_oficial }}" target="_blank">Câmara</a>{% endif %}
+                                    {% if item.url_inteiro_teor %}<a href="{{ item.url_inteiro_teor }}" target="_blank">Inteiro teor</a>{% endif %}
+                                </div>
+                            </footer>
+                        </article>
+                    {% endfor %}
+                </div>
+            </section>
+        {% endfor %}
+    </main>
+</body>
+</html>

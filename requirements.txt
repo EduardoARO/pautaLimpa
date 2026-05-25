@@ -1,0 +1,43 @@
+# =============================================================================
+# PautaLimpa — Dependências do Projeto (Completo — Épicos 0–8)
+# Instalar com: pip install -r requirements.txt
+# =============================================================================
+
+# --- Banco de Dados (Épicos 0–8) ---
+sqlalchemy>=2.0.36          # ORM — 2.0.36+ suporta Python 3.14
+psycopg[binary]>=3.2.0      # Driver PostgreSQL moderno com wheels para Python 3.14
+alembic==1.13.1             # Migrações de schema (futuras evoluções)
+
+# --- HTTP / Requisições (Épicos 1, 4, 5) ---
+requests==2.32.3            # Cliente HTTP para APIs externas
+urllib3==2.2.1              # Dependência do requests; fixada para compatibilidade
+
+# --- Interface local de preview ---
+flask>=3.0.0                # Frontend local para revisar ementas e captions
+gunicorn>=22.0.0            # Servidor WSGI para deploy em produção
+
+# --- Configuração de Ambiente (Épico 0) ---
+python-dotenv==1.0.1        # Carregamento de variáveis do arquivo .env
+
+# --- LLM — OpenAI / Primário (Épico 2) ---
+openai>=1.52.0              # SDK oficial OpenAI — compatível com httpx moderno
+
+# --- LLM — Anthropic Claude / Fallback (Épico 2) ---
+anthropic>=0.40.0           # SDK oficial Anthropic (Claude 3 Haiku) — wheels para Python 3.14
+
+# --- Agendamento (Épico 3) ---
+APScheduler==3.10.4         # Cron jobs em processo; suporte a timezones
+
+# --- Alertas / E-mail (Épico 5) ---
+# smtplib é nativo do Python; nenhuma lib extra necessária para e-mail
+# slack-sdk é opcional (Webhook não requer SDK)
+
+# --- Backup / AWS S3 (Épico 6) ---
+boto3==1.34.100             # SDK AWS (upload de backups para S3)
+
+# --- Utilitários ---
+python-dateutil==2.9.0      # Parsing flexível de datas vindas das APIs
+
+# --- Qualidade / Desenvolvimento ---
+pytest==8.2.0               # Framework de testes
+pytest-cov==5.0.0           # Cobertura de testes

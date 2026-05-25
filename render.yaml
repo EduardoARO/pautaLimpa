@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: pautalimpa
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn wsgi:application
+    envVars:
+      - key: FLASK_DEBUG
+        value: "false"
+      - key: UI_POSTS_LIMIT
+        value: "200"

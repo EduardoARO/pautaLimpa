@@ -1,0 +1,221 @@
+"""
+pipeline/quarantine.py
+Épico 3 — Fila de Quarentena e Validação de Saída da IA.
+
+Responsabilidades:
+  - Validar se o texto gerado pela LLM segue as 4 Regras (ex: Regra 4 — Citação)
+  - Detectar frases de recusa do modelo
+  - Mover registros inválidos para QUARENTENA e notificar a equipe
+  - Enviar relatório diário por e-mail com IDs em quarentena
+"""
+
+import os
+import re
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+
+from dotenv import load_dotenv
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
+
+from models.database import get_session
+from utils.logger import get_logger
+
+load_dotenv()
+
+logger = get_logger(__name__)
+
+# Regex que valida a Regra 4: primeira linha = "[TIPO] - [NÚMERO]/[ANO]"
+_RE_CITACAO_OBRIGATORIA = re.compile(
+    r"^\s*[A-Z]{2,5}\s*-\s*\d{1,6}/\d{4}",
+    re.MULTILINE,
+)
+
+# Frases que indicam recusa ou resposta inválida da IA
+_REFUSAL_PHRASES = [
+    "desculpe, não posso",
+    "sorry, i cannot",
+    "não é possível analisar",
+    "não consigo processar",
+    "como modelo de linguagem",
+    "não tenho capacidade",
+    "como assistente de ia",
+    "não posso fornecer",
+]
+
+_FETCH_QUARANTINE_CANDIDATES_SQL = text("""
+    SELECT
+        pb.id          AS projeto_id,
+        pb.sigla_tipo,
+        pb.numero,
+        pb.ano,
+        pia.texto_traduzido
+    FROM projetos_brutos pb
+    JOIN processamento_ia pia ON pia.fk_projeto = pb.id
+    WHERE pb.status_processamento = 'AGUARDANDO_MIDIA'
+      AND pia.status_ia IN ('SUCESSO', 'FALLBACK_UTILIZADO')
+      AND pia.texto_traduzido IS NOT NULL
+""")
+
+_UPDATE_STATUS_SQL = text("""
+    UPDATE projetos_brutos
+    SET status_processamento = :status
+    WHERE id = :id
+""")
+
+_FETCH_DAILY_QUARANTINE_SQL = text("""
+    SELECT pb.id, pb.sigla_tipo, pb.numero, pb.ano, pb.data_atualizacao
+    FROM projetos_brutos pb
+    WHERE pb.status_processamento = 'QUARENTENA'
+      AND pb.data_atualizacao >= NOW() - INTERVAL '24 hours'
+    ORDER BY pb.data_atualizacao DESC
+""")
+
+
+def _has_valid_citation(texto: str) -> bool:
+    """Verifica se a primeira linha contém a citação obrigatória (Regra 4)."""
+    primeira_linha = texto.strip().split("\n")[0]
+    return bool(_RE_CITACAO_OBRIGATORIA.search(primeira_linha))
+
+
+def _is_refusal(texto: str) -> bool:
+    """Detecta frases de recusa ou resposta inválida da IA."""
+    texto_lower = texto.lower()
+    return any(phrase in texto_lower for phrase in _REFUSAL_PHRASES)
+
+
+class QuarantineValidator:
+    """
+    Percorre projetos em AGUARDANDO_MIDIA e valida a saída da LLM.
+    Registros que falham nas validações são movidos para QUARENTENA.
+    """
+
+    def validate_all(self) -> dict[str, int]:
+        """
+        Valida todos os projetos em AGUARDANDO_MIDIA.
+
+        Returns:
+            dict: {"validados": N, "aprovados": N, "quarentena": N}
+        """
+        stats = {"validados": 0, "aprovados": 0, "quarentena": 0}
+
+        with get_session() as session:
+            rows = session.execute(_FETCH_QUARANTINE_CANDIDATES_SQL).fetchall()
+
+        for row in rows:
+            stats["validados"] += 1
+            texto = row.texto_traduzido or ""
+            motivo = None
+
+            if _is_refusal(texto):
+                motivo = "Recusa do modelo detectada no texto gerado"
+            elif not _has_valid_citation(texto):
+                motivo = "Citação obrigatória ausente (Regra 4 violada)"
+
+            if motivo:
+                self._quarantine(row.projeto_id, motivo)
+                stats["quarentena"] += 1
+                logger.warning(
+                    "QUARENTENA | id=%d | %s %s/%s | motivo: %s",
+                    row.projeto_id, row.sigla_tipo, row.numero, row.ano, motivo,
+                )
+            else:
+                stats["aprovados"] += 1
+                logger.debug(
+                    "APROVADO | id=%d | %s %s/%s — citação e conteúdo válidos.",
+                    row.projeto_id, row.sigla_tipo, row.numero, row.ano,
+                )
+
+        logger.info(
+            "Validação concluída | validados=%d | aprovados=%d | quarentena=%d",
+            stats["validados"], stats["aprovados"], stats["quarentena"],
+        )
+        return stats
+
+    def _quarantine(self, projeto_id: int, motivo: str) -> None:
+        with get_session() as session:
+            try:
+                session.execute(
+                    _UPDATE_STATUS_SQL,
+                    {"status": "QUARENTENA", "id": projeto_id},
+                )
+                session.commit()
+            except SQLAlchemyError as exc:
+                session.rollback()
+                logger.error("Erro ao mover id=%d para QUARENTENA: %s", projeto_id, exc)
+                raise
+
+
+class QuarantineReporter:
+    """Gera e envia relatório diário por e-mail com IDs em quarentena."""
+
+    def __init__(self) -> None:
+        self._smtp_host     = os.getenv("SMTP_HOST", "smtp.gmail.com")
+        self._smtp_port     = int(os.getenv("SMTP_PORT", "587"))
+        self._smtp_user     = os.getenv("SMTP_USER", "")
+        self._smtp_password = os.getenv("SMTP_PASSWORD", "")
+        self._from_email    = os.getenv("ALERT_FROM_EMAIL", self._smtp_user)
+        self._to_emails     = [
+            e.strip()
+            for e in os.getenv("ALERT_TO_EMAILS", "").split(",")
+            if e.strip()
+        ]
+
+    def send_daily_report(self) -> bool:
+        """
+        Busca IDs em quarentena das últimas 24h e envia e-mail para a equipe.
+
+        Returns:
+            bool: True se e-mail enviado com sucesso ou sem itens para reportar.
+        """
+        with get_session() as session:
+            rows = session.execute(_FETCH_DAILY_QUARANTINE_SQL).fetchall()
+
+        if not rows:
+            logger.info("Relatório de quarentena: nenhum item nas últimas 24h.")
+            return True
+
+        if not self._to_emails:
+            logger.warning("ALERT_TO_EMAILS não configurado — relatório de quarentena não enviado.")
+            return False
+
+        items_html = "".join(
+            f"<tr><td>{r.id}</td><td>{r.sigla_tipo} {r.numero}/{r.ano}</td>"
+            f"<td>{r.data_atualizacao.strftime('%d/%m/%Y %H:%M')}</td></tr>"
+            for r in rows
+        )
+        body = f"""
+        <html><body>
+        <h2>PautaLimpa — Relatório Diário de Quarentena</h2>
+        <p>{len(rows)} item(s) movido(s) para quarentena nas últimas 24 horas:</p>
+        <table border="1" cellpadding="5">
+          <tr><th>ID</th><th>Projeto</th><th>Data</th></tr>
+          {items_html}
+        </table>
+        <p>Acesse o banco para revisar e aprovar ou descartar cada item.</p>
+        </body></html>
+        """
+        return self._send_email(
+            subject=f"[PautaLimpa] {len(rows)} item(s) em Quarentena — Revisão Necessária",
+            html_body=body,
+        )
+
+    def _send_email(self, subject: str, html_body: str) -> bool:
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"]    = self._from_email
+        msg["To"]      = ", ".join(self._to_emails)
+        msg.attach(MIMEText(html_body, "html", "utf-8"))
+
+        try:
+            with smtplib.SMTP(self._smtp_host, self._smtp_port) as server:
+                server.ehlo()
+                server.starttls()
+                server.login(self._smtp_user, self._smtp_password)
+                server.sendmail(self._from_email, self._to_emails, msg.as_string())
+            logger.info("E-mail de quarentena enviado para: %s", self._to_emails)
+            return True
+        except smtplib.SMTPException as exc:
+            logger.error("Falha ao enviar e-mail de quarentena: %s", exc)
+            return False

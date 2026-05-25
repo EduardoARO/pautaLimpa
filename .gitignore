@@ -1,0 +1,26 @@
+# Credenciais e configuração local (NUNCA versionar)
+.env
+instagram_session.json
+
+# Logs gerados em runtime
+logs/*.log
+
+# Ambiente virtual Python
+.venv/
+venv/
+env/
+
+# Cache do Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# IDEs
+.vscode/
+.idea/
+*.sublime-project
+
+# Build / dist
+dist/
+build/
+*.egg-info/
