@@ -102,7 +102,7 @@ def _build_view_model(rows):
 
 @app.route("/")
 def index():
-    limit = min(int(request.args.get("limit", os.getenv("UI_POSTS_LIMIT", "50"))), 200)
+    limit = min(int(request.args.get("limit", os.getenv("UI_POSTS_LIMIT", "500"))), 500)
     date_from = request.args.get("date_from") or ""
     date_to = request.args.get("date_to") or ""
     theme = (request.args.get("theme") or "").strip()
