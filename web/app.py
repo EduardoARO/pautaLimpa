@@ -34,7 +34,13 @@ _POSTS_QUERY = text("""
         pia.data_processamento
     FROM projetos_brutos pb
     LEFT JOIN processamento_ia pia ON pia.fk_projeto = pb.id
-    WHERE (:status = 'TODOS' OR pb.status_processamento::text = :status)
+    WHERE (:date_from = '' OR pb.data_apresentacao >= CAST(:date_from AS DATE))
+      AND (:date_to = '' OR pb.data_apresentacao <= CAST(:date_to AS DATE))
+      AND (
+        :theme = ''
+        OR pb.ementa_bruta ILIKE '%' || :theme || '%'
+        OR COALESCE(pia.texto_traduzido, '') ILIKE '%' || :theme || '%'
+      )
     ORDER BY pb.data_apresentacao DESC NULLS LAST, pb.id DESC
     LIMIT :limit
 """)
@@ -97,11 +103,21 @@ def _build_view_model(rows):
 @app.route("/")
 def index():
     limit = min(int(request.args.get("limit", os.getenv("UI_POSTS_LIMIT", "50"))), 200)
-    status = request.args.get("status", "TODOS")
+    date_from = request.args.get("date_from") or ""
+    date_to = request.args.get("date_to") or ""
+    theme = (request.args.get("theme") or "").strip()
 
     try:
         with get_session() as session:
-            rows = session.execute(_POSTS_QUERY, {"limit": limit, "status": status}).fetchall()
+            rows = session.execute(
+                _POSTS_QUERY,
+                {
+                    "limit": limit,
+                    "date_from": date_from,
+                    "date_to": date_to,
+                    "theme": theme,
+                },
+            ).fetchall()
             stats_rows = session.execute(_STATS_QUERY).fetchall()
     except SQLAlchemyError as exc:
         return render_template(
@@ -119,7 +135,9 @@ def index():
         "index.html",
         groups=groups,
         stats=stats,
-        selected_status=status,
+        date_from=date_from,
+        date_to=date_to,
+        theme=theme,
         limit=limit,
         total_visible=sum(len(items) for items in groups.values()),
     )

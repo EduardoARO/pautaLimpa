@@ -1,0 +1,50 @@
+name: PautaLimpa Auto Pipeline
+
+on:
+  schedule:
+    - cron: "0 3,15 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: pautalimpa-auto-pipeline
+  cancel-in-progress: false
+
+jobs:
+  ingest-and-process:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run extraction and AI processing
+        env:
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+          DB_NAME: ${{ secrets.DB_NAME }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: ${{ secrets.OPENAI_MODEL }}
+          OPENAI_MAX_TOKENS: ${{ secrets.OPENAI_MAX_TOKENS }}
+          OPENAI_TEMPERATURE: ${{ secrets.OPENAI_TEMPERATURE }}
+          API_BASE_URL: ${{ secrets.API_BASE_URL }}
+          API_PAGE_SIZE: ${{ vars.API_PAGE_SIZE || '100' }}
+          API_PAGE_DELAY_SECONDS: ${{ vars.API_PAGE_DELAY_SECONDS || '0.5' }}
+          MAX_PAGES_PER_RUN: ${{ vars.MAX_PAGES_PER_RUN || '20' }}
+          EXTRACTOR_EARLY_STOP_ON_DUPLICATE: ${{ vars.EXTRACTOR_EARLY_STOP_ON_DUPLICATE || 'true' }}
+          LLM_BATCH_SIZE: ${{ vars.LLM_BATCH_SIZE || '1' }}
+          AUTO_PROCESS_UNTIL_EMPTY: ${{ vars.AUTO_PROCESS_UNTIL_EMPTY || 'true' }}
+          AUTO_PIPELINE_RUN_ON_START: "true"
+        run: python -c "from auto_ingest_process import run_once; run_once()"

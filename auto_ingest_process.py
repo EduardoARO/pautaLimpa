@@ -1,5 +1,6 @@
 import os
 import time
+from datetime import datetime
 
 from dotenv import load_dotenv
 
@@ -15,6 +16,11 @@ _INTERVAL_SECONDS = int(os.getenv("AUTO_PIPELINE_INTERVAL_SECONDS", "900"))
 _LLM_BATCH_SIZE = int(os.getenv("LLM_BATCH_SIZE", "1"))
 _RUN_ON_START = os.getenv("AUTO_PIPELINE_RUN_ON_START", "true").lower() == "true"
 _PROCESS_UNTIL_EMPTY = os.getenv("AUTO_PROCESS_UNTIL_EMPTY", "false").lower() == "true"
+_RUN_TIMES = [
+    item.strip()
+    for item in os.getenv("AUTO_PIPELINE_RUN_TIMES", "00:00,12:00").split(",")
+    if item.strip()
+]
 
 
 def run_once() -> None:
@@ -31,19 +37,30 @@ def run_once() -> None:
 
 
 def main() -> None:
-    logger.info("AUTO: watcher iniciado | intervalo=%ds | batch_ia=%d", _INTERVAL_SECONDS, _LLM_BATCH_SIZE)
+    logger.info("AUTO: watcher iniciado | horários=%s | batch_ia=%d", _RUN_TIMES, _LLM_BATCH_SIZE)
     first_run = True
+    last_run_key = None
     while True:
-        if first_run and not _RUN_ON_START:
-            first_run = False
-        else:
+        now = datetime.now()
+        current_time = now.strftime("%H:%M")
+        current_key = now.strftime("%Y-%m-%d %H:%M")
+        should_run = current_time in _RUN_TIMES and current_key != last_run_key
+
+        if first_run and _RUN_ON_START:
+            should_run = True
+            current_key = f"startup-{now.isoformat(timespec='seconds')}"
+
+        if should_run:
             try:
                 run_once()
+                last_run_key = current_key
             except Exception as exc:
                 logger.error("AUTO: erro no ciclo automático: %s", exc, exc_info=True)
             first_run = False
+        elif first_run:
+            first_run = False
 
-        logger.info("AUTO: aguardando %ds até o próximo ciclo...", _INTERVAL_SECONDS)
+        logger.info("AUTO: aguardando %ds até nova checagem de horário...", _INTERVAL_SECONDS)
         time.sleep(_INTERVAL_SECONDS)
 
 
