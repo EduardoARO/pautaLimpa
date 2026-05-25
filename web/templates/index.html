@@ -4,16 +4,26 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta http-equiv="refresh" content="60">
-    <title>PautaLimpa Preview</title>
+    <title>PautaLimpa</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
 </head>
 <body>
     <main class="shell">
         <header class="hero">
-            <div>
-                <p class="eyebrow">PautaLimpa</p>
-                <h2>Prévia editorial dos posts</h2>
+            <div class="brand">
+                <div class="logo-slot">
+                    <img src="{{ url_for('static', filename='logo.png') }}" alt="PautaLimpa" onerror="this.style.display='none'; this.nextElementSibling.style.display='grid';">
+                    <span>PL</span>
+                </div>
+                <div>
+                    <p class="eyebrow">PautaLimpa</p>
+                    <h2>A realidade transparente para você.</h2>
+                </div>
             </div>
+            <button type="button" class="theme-toggle" aria-label="Alternar tema" data-theme-toggle>
+                <span class="theme-icon theme-icon-sun">☀</span>
+                <span class="theme-icon theme-icon-moon">☾</span>
+            </button>
         </header>
 
         <section class="toolbar">
@@ -46,11 +56,11 @@
         {% endif %}
 
         {% for date_label, items in groups.items() %}
-            <section class="date-group">
-                <div class="date-heading">
+            <details class="date-group" open>
+                <summary class="date-heading">
                     <h2>{{ date_label }}</h2>
                     <span>{{ items|length }} item(ns)</span>
-                </div>
+                </summary>
 
                 <div class="grid">
                     {% for item in items %}
@@ -62,11 +72,6 @@
                                 </div>
                             </div>
 
-                            <div class="meta-row">
-                                <span>{{ item.title }}</span>
-                                <span>Apresentado em {{ item.data_apresentacao }}</span>
-                            </div>
-
                             <div class="columns">
                                 <section class="panel source">
                                     <p class="panel-label">Ementa original</p>
@@ -75,9 +80,6 @@
                                 <section class="panel caption">
                                     <p class="panel-label">Texto editorial</p>
                                     <pre>{{ item.caption }}</pre>
-                                    <div class="caption-footer">
-                                        <span>{{ item.caption_chars }} / 2.200 caracteres</span>
-                                    </div>
                                 </section>
                             </div>
 
@@ -93,8 +95,21 @@
                         </article>
                     {% endfor %}
                 </div>
-            </section>
+            </details>
         {% endfor %}
     </main>
+    <script>
+        const themeToggle = document.querySelector("[data-theme-toggle]");
+        const savedTheme = localStorage.getItem("pautalimpa-theme");
+        const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+        const initialTheme = savedTheme || (prefersDark ? "dark" : "light");
+
+        document.documentElement.dataset.theme = initialTheme;
+        themeToggle.addEventListener("click", () => {
+            const nextTheme = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+            document.documentElement.dataset.theme = nextTheme;
+            localStorage.setItem("pautalimpa-theme", nextTheme);
+        });
+    </script>
 </body>
 </html>
