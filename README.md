@@ -1,6 +1,28 @@
 # PautaLimpa
 
-Pipeline de automação para ingestão de dados legislativos, processamento via LLM e publicação no Instagram.
+# Descrição do projeto
+
+**PautaLimpa** é uma plataforma de monitoramento legislativo que coleta automaticamente Projetos de Lei da Câmara dos Deputados, organiza as ementas por data e usa inteligência artificial para transformar textos jurídicos em resumos jornalísticos claros, neutros e acessíveis ao público geral.
+
+O sistema foi desenvolvido para apoiar a comunicação pública sobre proposições legislativas, mantendo isenção editorial, linguagem simples e rastreabilidade das informações. Cada proposta é capturada da API oficial de Dados Abertos da Câmara, armazenada em banco PostgreSQL/Supabase e processada por IA com regras rígidas de imparcialidade, tom jornalístico, limite de caracteres e citação obrigatória do projeto.
+
+A aplicação inclui uma interface web minimalista para visualizar as ementas originais e os textos gerados pela IA, separados por data de apresentação. Também possui scripts de automação para extração, preenchimento de datas ausentes, processamento em lote e preparação para deploy gratuito em plataformas como Render.
+
+## Principais recursos
+
+- **Coleta automática** de Projetos de Lei via API oficial da Câmara dos Deputados
+- **Armazenamento em PostgreSQL/Supabase**
+- **Processamento por IA com Gemini**
+- **Geração de textos jornalísticos neutros e acessíveis**
+- **Interface web minimalista para revisão editorial**
+- **Agrupamento das proposições por data de apresentação**
+- **Controle de status do pipeline**
+- **Tratamento de erros de captura e duplicatas**
+- **Preparado para deploy gratuito no Render**
+
+## Objetivo
+
+Tornar o acompanhamento legislativo mais compreensível para cidadãos, comunicadores e criadores de conteúdo, traduzindo ementas técnicas em explicações objetivas, sem opinião, sem viés político e em formato adequado para publicação digital.
 
 ## Estrutura do Projeto
 
