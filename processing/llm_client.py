@@ -453,7 +453,8 @@ class LLMProcessor:
             f"{projeto_row['numero']}/{projeto_row['ano']}. "
             f"O texto explicativo apos a primeira linha deve ter no minimo {_MIN_BODY_CHARS} caracteres "
             f"e a resposta completa nunca pode ultrapassar {_MAX_RESPONSE_CHARS} caracteres. "
-            "Mantenha tom estritamente analitico, jornalistico e sem adjetivos opinativos."
+            "Mantenha tom estritamente analitico, jornalistico e sem adjetivos opinativos. "
+            "Explique de forma simples, direta e sem repetir a mesma ideia."
         )
         return base_messages + [
             {"role": "assistant", "content": invalid_text},

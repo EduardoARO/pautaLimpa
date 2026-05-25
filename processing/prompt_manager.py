@@ -40,6 +40,9 @@ Exigencias obrigatorias de saida:
 - O texto explicativo apos a primeira linha deve ter no minimo 300 caracteres
 - A resposta completa nunca pode ultrapassar 2.200 caracteres
 - Explique o assunto da ementa, a mudanca proposta e quem pode ser afetado
+- Priorize explicacao simples e direta, sem repetir a mesma ideia com outras palavras
+- Use de preferencia 2 paragrafos curtos: um para explicar o que muda e outro para mostrar o efeito pratico
+- Cada paragrafo deve trazer informacao nova, sem reescrever o anterior
 - Mantenha tom estritamente analitico, sem adjetivos opinativos
 """.strip()
 
