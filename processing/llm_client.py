@@ -35,6 +35,10 @@ _MAX_PRIMARY_ATTEMPTS = int(os.getenv("LLM_MAX_PRIMARY_ATTEMPTS", "3"))
 _RETRY_WAIT_SECONDS   = int(os.getenv("LLM_RETRY_WAIT_SECONDS", "30"))
 # Limite de caracteres da resposta (Instagram)
 _MAX_RESPONSE_CHARS   = 2200
+# Tamanho minimo do texto explicativo apos a linha de citacao
+_MIN_BODY_CHARS       = 300
+
+_REQUIRED_CITATION_PATTERN = re.compile(r"^[A-Z]{2,10}\s*-\s*\d{1,6}/\d{4}$")
 
 # Frases que indicam recusa do modelo (detectar RECUSA_MODELO)
 _REFUSAL_PATTERNS = [
@@ -407,6 +411,55 @@ class LLMProcessor:
                 logger.error("Erro ao salvar resultado IA para fk_projeto=%d: %s", fk_projeto, exc)
                 raise
 
+    def _truncate_to_instagram_limit(self, text: str) -> str:
+        """Garante o limite absoluto de caracteres aceito na legenda."""
+        if len(text) <= _MAX_RESPONSE_CHARS:
+            return text
+        return text[:_MAX_RESPONSE_CHARS].rstrip()
+
+    def _validate_generated_text(self, text: str) -> str | None:
+        """Valida regras estruturais da saida da LLM."""
+        normalized = (text or "").strip()
+        if not normalized:
+            return "a resposta veio vazia"
+
+        if len(normalized) > _MAX_RESPONSE_CHARS:
+            return f"a resposta ultrapassou {_MAX_RESPONSE_CHARS} caracteres"
+
+        lines = normalized.splitlines()
+        first_line = lines[0].strip() if lines else ""
+        body = "\n".join(lines[1:]).strip()
+
+        if not _REQUIRED_CITATION_PATTERN.fullmatch(first_line):
+            return "a primeira linha nao esta no formato [TIPO] - [NUMERO]/[ANO]"
+
+        if len(body) < _MIN_BODY_CHARS:
+            return f"o texto explicativo ficou com menos de {_MIN_BODY_CHARS} caracteres"
+
+        return None
+
+    def _build_correction_messages(
+        self,
+        base_messages: list[dict],
+        invalid_text: str,
+        invalid_reason: str,
+        projeto_row: dict,
+    ) -> list[dict]:
+        """Pede ao modelo uma reescrita quando a primeira saida viola regras formais."""
+        correction_request = (
+            "Sua resposta anterior foi rejeitada porque "
+            f"{invalid_reason}. Reescreva do zero e cumpra todas as 5 regras. "
+            f"A primeira linha deve ser exatamente {projeto_row['sigla_tipo']} - "
+            f"{projeto_row['numero']}/{projeto_row['ano']}. "
+            f"O texto explicativo apos a primeira linha deve ter no minimo {_MIN_BODY_CHARS} caracteres "
+            f"e a resposta completa nunca pode ultrapassar {_MAX_RESPONSE_CHARS} caracteres. "
+            "Mantenha tom estritamente analitico, jornalistico e sem adjetivos opinativos."
+        )
+        return base_messages + [
+            {"role": "assistant", "content": invalid_text},
+            {"role": "user", "content": correction_request},
+        ]
+
     def process_one(self, projeto_row: dict) -> str:
         """
         Processa um único projeto.
@@ -485,15 +538,54 @@ class LLMProcessor:
             )
             return "RECUSA_MODELO"
 
-        # Trunca resposta ao limite do Instagram (2.200 chars)
-        texto_final = resultado["text"]
-        if len(texto_final) > _MAX_RESPONSE_CHARS:
-            texto_final = texto_final[:_MAX_RESPONSE_CHARS]
+        # Garante limite do Instagram e tenta uma autocorrecao se a saida vier fora das regras.
+        texto_final = self._truncate_to_instagram_limit(resultado["text"] or "")
+        if texto_final != (resultado["text"] or ""):
             resultado["text"] = texto_final
             logger.warning(
                 "Resposta da LLM truncada para %d chars (limite Instagram) | id=%d.",
                 _MAX_RESPONSE_CHARS, fk_projeto,
             )
+
+        invalid_reason = self._validate_generated_text(texto_final)
+        if invalid_reason:
+            logger.warning(
+                "Saida inicial invalida para id=%d (%s). Solicitando reescrita ao modelo.",
+                fk_projeto, invalid_reason,
+            )
+            provider_used = self._fallback if is_fallback else self._primary
+            correction_messages = self._build_correction_messages(
+                messages, texto_final, invalid_reason, projeto_row,
+            )
+            corrected_result, _ = self._call_with_retry(provider_used, correction_messages)
+
+            if corrected_result is not None and not self._is_refusal(corrected_result["text"]):
+                corrected_text = self._truncate_to_instagram_limit(corrected_result["text"] or "")
+                if corrected_text != (corrected_result["text"] or ""):
+                    logger.warning(
+                        "Resposta corrigida da LLM truncada para %d chars | id=%d.",
+                        _MAX_RESPONSE_CHARS, fk_projeto,
+                    )
+                corrected_result["text"] = corrected_text
+                corrected_invalid_reason = self._validate_generated_text(corrected_text)
+                if corrected_invalid_reason is None:
+                    resultado = corrected_result
+                    texto_final = corrected_text
+                    logger.info("Saida corrigida com sucesso para id=%d.", fk_projeto)
+                else:
+                    resultado = corrected_result
+                    texto_final = corrected_text
+                    logger.warning(
+                        "Saida corrigida ainda invalida para id=%d (%s). Quarentena validara o item.",
+                        fk_projeto, corrected_invalid_reason,
+                    )
+            else:
+                logger.warning(
+                    "Nao foi possivel autocorrigir a saida para id=%d; quarentena validara o item.",
+                    fk_projeto,
+                )
+
+        resultado["text"] = texto_final
 
         status_ia = "FALLBACK_UTILIZADO" if is_fallback else "SUCESSO"
         self._save_result(

@@ -1,12 +1,12 @@
 """
 pipeline/quarantine.py
-Épico 3 — Fila de Quarentena e Validação de Saída da IA.
+Epico 3 - Fila de Quarentena e Validacao de Saida da IA.
 
 Responsabilidades:
-  - Validar se o texto gerado pela LLM segue as 4 Regras (ex: Regra 4 — Citação)
+  - Validar se o texto gerado pela LLM segue as 5 regras
   - Detectar frases de recusa do modelo
-  - Mover registros inválidos para QUARENTENA e notificar a equipe
-  - Enviar relatório diário por e-mail com IDs em quarentena
+  - Mover registros invalidos para QUARENTENA e notificar a equipe
+  - Enviar relatorio diario por e-mail com IDs em quarentena
 """
 
 import os
@@ -26,21 +26,29 @@ load_dotenv()
 
 logger = get_logger(__name__)
 
-# Regex que valida a Regra 4: primeira linha = "[TIPO] - [NÚMERO]/[ANO]"
+_MAX_RESPONSE_CHARS = 2200
+_MIN_BODY_CHARS = 300
+
+# Regex que valida a Regra 4: primeira linha = "[TIPO] - [NUMERO]/[ANO]"
 _RE_CITACAO_OBRIGATORIA = re.compile(
-    r"^\s*[A-Z]{2,5}\s*-\s*\d{1,6}/\d{4}",
+    r"^\s*[A-Z]{2,10}\s*-\s*\d{1,6}/\d{4}\s*$",
     re.MULTILINE,
 )
 
-# Frases que indicam recusa ou resposta inválida da IA
+# Frases que indicam recusa ou resposta invalida da IA
 _REFUSAL_PHRASES = [
+    "desculpe, nao posso",
     "desculpe, não posso",
     "sorry, i cannot",
+    "nao e possivel analisar",
     "não é possível analisar",
+    "nao consigo processar",
     "não consigo processar",
     "como modelo de linguagem",
+    "nao tenho capacidade",
     "não tenho capacidade",
     "como assistente de ia",
+    "nao posso fornecer",
     "não posso fornecer",
 ]
 
@@ -74,21 +82,36 @@ _FETCH_DAILY_QUARANTINE_SQL = text("""
 
 
 def _has_valid_citation(texto: str) -> bool:
-    """Verifica se a primeira linha contém a citação obrigatória (Regra 4)."""
+    """Verifica se a primeira linha contem a citacao obrigatoria."""
     primeira_linha = texto.strip().split("\n")[0]
     return bool(_RE_CITACAO_OBRIGATORIA.search(primeira_linha))
 
 
+def _has_valid_length(texto: str) -> tuple[bool, str | None]:
+    """Valida o tamanho total da resposta e do corpo explicativo."""
+    texto_normalizado = (texto or "").strip()
+
+    if len(texto_normalizado) > _MAX_RESPONSE_CHARS:
+        return False, f"Resposta acima de {_MAX_RESPONSE_CHARS} caracteres"
+
+    linhas = texto_normalizado.splitlines()
+    corpo = "\n".join(linhas[1:]).strip() if len(linhas) > 1 else ""
+    if len(corpo) < _MIN_BODY_CHARS:
+        return False, f"Texto explicativo com menos de {_MIN_BODY_CHARS} caracteres"
+
+    return True, None
+
+
 def _is_refusal(texto: str) -> bool:
-    """Detecta frases de recusa ou resposta inválida da IA."""
+    """Detecta frases de recusa ou resposta invalida da IA."""
     texto_lower = texto.lower()
     return any(phrase in texto_lower for phrase in _REFUSAL_PHRASES)
 
 
 class QuarantineValidator:
     """
-    Percorre projetos em AGUARDANDO_MIDIA e valida a saída da LLM.
-    Registros que falham nas validações são movidos para QUARENTENA.
+    Percorre projetos em AGUARDANDO_MIDIA e valida a saida da LLM.
+    Registros que falham nas validacoes sao movidos para QUARENTENA.
     """
 
     def validate_all(self) -> dict[str, int]:
@@ -111,7 +134,11 @@ class QuarantineValidator:
             if _is_refusal(texto):
                 motivo = "Recusa do modelo detectada no texto gerado"
             elif not _has_valid_citation(texto):
-                motivo = "Citação obrigatória ausente (Regra 4 violada)"
+                motivo = "Citacao obrigatoria ausente (Regra 4 violada)"
+            else:
+                comprimento_valido, motivo_comprimento = _has_valid_length(texto)
+                if not comprimento_valido:
+                    motivo = motivo_comprimento
 
             if motivo:
                 self._quarantine(row.projeto_id, motivo)
@@ -123,12 +150,12 @@ class QuarantineValidator:
             else:
                 stats["aprovados"] += 1
                 logger.debug(
-                    "APROVADO | id=%d | %s %s/%s — citação e conteúdo válidos.",
+                    "APROVADO | id=%d | %s %s/%s - citacao e conteudo validos.",
                     row.projeto_id, row.sigla_tipo, row.numero, row.ano,
                 )
 
         logger.info(
-            "Validação concluída | validados=%d | aprovados=%d | quarentena=%d",
+            "Validacao concluida | validados=%d | aprovados=%d | quarentena=%d",
             stats["validados"], stats["aprovados"], stats["quarentena"],
         )
         return stats
@@ -148,15 +175,15 @@ class QuarantineValidator:
 
 
 class QuarantineReporter:
-    """Gera e envia relatório diário por e-mail com IDs em quarentena."""
+    """Gera e envia relatorio diario por e-mail com IDs em quarentena."""
 
     def __init__(self) -> None:
-        self._smtp_host     = os.getenv("SMTP_HOST", "smtp.gmail.com")
-        self._smtp_port     = int(os.getenv("SMTP_PORT", "587"))
-        self._smtp_user     = os.getenv("SMTP_USER", "")
+        self._smtp_host = os.getenv("SMTP_HOST", "smtp.gmail.com")
+        self._smtp_port = int(os.getenv("SMTP_PORT", "587"))
+        self._smtp_user = os.getenv("SMTP_USER", "")
         self._smtp_password = os.getenv("SMTP_PASSWORD", "")
-        self._from_email    = os.getenv("ALERT_FROM_EMAIL", self._smtp_user)
-        self._to_emails     = [
+        self._from_email = os.getenv("ALERT_FROM_EMAIL", self._smtp_user)
+        self._to_emails = [
             e.strip()
             for e in os.getenv("ALERT_TO_EMAILS", "").split(",")
             if e.strip()
@@ -164,7 +191,7 @@ class QuarantineReporter:
 
     def send_daily_report(self) -> bool:
         """
-        Busca IDs em quarentena das últimas 24h e envia e-mail para a equipe.
+        Busca IDs em quarentena das ultimas 24h e envia e-mail para a equipe.
 
         Returns:
             bool: True se e-mail enviado com sucesso ou sem itens para reportar.
@@ -173,11 +200,11 @@ class QuarantineReporter:
             rows = session.execute(_FETCH_DAILY_QUARANTINE_SQL).fetchall()
 
         if not rows:
-            logger.info("Relatório de quarentena: nenhum item nas últimas 24h.")
+            logger.info("Relatorio de quarentena: nenhum item nas ultimas 24h.")
             return True
 
         if not self._to_emails:
-            logger.warning("ALERT_TO_EMAILS não configurado — relatório de quarentena não enviado.")
+            logger.warning("ALERT_TO_EMAILS nao configurado - relatorio de quarentena nao enviado.")
             return False
 
         items_html = "".join(
@@ -187,8 +214,8 @@ class QuarantineReporter:
         )
         body = f"""
         <html><body>
-        <h2>PautaLimpa — Relatório Diário de Quarentena</h2>
-        <p>{len(rows)} item(s) movido(s) para quarentena nas últimas 24 horas:</p>
+        <h2>PautaLimpa - Relatorio Diario de Quarentena</h2>
+        <p>{len(rows)} item(s) movido(s) para quarentena nas ultimas 24 horas:</p>
         <table border="1" cellpadding="5">
           <tr><th>ID</th><th>Projeto</th><th>Data</th></tr>
           {items_html}
@@ -197,15 +224,15 @@ class QuarantineReporter:
         </body></html>
         """
         return self._send_email(
-            subject=f"[PautaLimpa] {len(rows)} item(s) em Quarentena — Revisão Necessária",
+            subject=f"[PautaLimpa] {len(rows)} item(s) em Quarentena - Revisao Necessaria",
             html_body=body,
         )
 
     def _send_email(self, subject: str, html_body: str) -> bool:
         msg = MIMEMultipart("alternative")
         msg["Subject"] = subject
-        msg["From"]    = self._from_email
-        msg["To"]      = ", ".join(self._to_emails)
+        msg["From"] = self._from_email
+        msg["To"] = ", ".join(self._to_emails)
         msg.attach(MIMEText(html_body, "html", "utf-8"))
 
         try:

@@ -85,8 +85,6 @@
 
                             <footer class="card-footer">
                                 <span>Data de apresentação: {{ item.data_apresentacao }}</span>
-                                <span>Capturado em: {{ item.data_captura }}</span>
-                                <span>Texto gerado em: {{ item.data_processamento }}</span>
                                 <div class="links">
                                     {% if item.link_oficial %}<a href="{{ item.link_oficial }}" target="_blank">Câmara</a>{% endif %}
                                     {% if item.url_inteiro_teor %}<a href="{{ item.url_inteiro_teor }}" target="_blank">Inteiro teor</a>{% endif %}
