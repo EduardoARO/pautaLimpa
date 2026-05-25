@@ -4,9 +4,10 @@ from datetime import datetime
 
 from dotenv import load_dotenv
 from flask import Flask, render_template, request
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy import text
 
-from models.database import get_session
+from models.database import get_database_diagnostics, get_session
 
 load_dotenv()
 
@@ -98,9 +99,18 @@ def index():
     limit = min(int(request.args.get("limit", os.getenv("UI_POSTS_LIMIT", "50"))), 200)
     status = request.args.get("status", "TODOS")
 
-    with get_session() as session:
-        rows = session.execute(_POSTS_QUERY, {"limit": limit, "status": status}).fetchall()
-        stats_rows = session.execute(_STATS_QUERY).fetchall()
+    try:
+        with get_session() as session:
+            rows = session.execute(_POSTS_QUERY, {"limit": limit, "status": status}).fetchall()
+            stats_rows = session.execute(_STATS_QUERY).fetchall()
+    except SQLAlchemyError as exc:
+        return render_template(
+            "error.html",
+            title="Erro de conexão com o banco",
+            message="Não foi possível conectar ao PostgreSQL configurado.",
+            details=str(exc),
+            diagnostics=get_database_diagnostics(),
+        ), 500
 
     groups = _build_view_model(rows)
     stats = {row.status_processamento: row.total for row in stats_rows}

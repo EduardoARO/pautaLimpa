@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ title }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+    <main class="page">
+        <section class="hero">
+            <h1>{{ title }}</h1>
+            <p>{{ message }}</p>
+        </section>
+
+        <section class="card">
+            <h2>Configuração lida pela aplicação</h2>
+            <dl class="meta-grid">
+                <dt>DATABASE_URL configurada</dt>
+                <dd>{{ diagnostics.database_url_configured }}</dd>
+                <dt>DB_HOST</dt>
+                <dd>{{ diagnostics.db_host }}</dd>
+                <dt>DB_PORT</dt>
+                <dd>{{ diagnostics.db_port }}</dd>
+                <dt>DB_NAME</dt>
+                <dd>{{ diagnostics.db_name }}</dd>
+                <dt>DB_USER</dt>
+                <dd>{{ diagnostics.db_user }}</dd>
+                <dt>DB_PASSWORD configurada</dt>
+                <dd>{{ diagnostics.db_password_configured }}</dd>
+            </dl>
+        </section>
+
+        <section class="card">
+            <h2>Detalhes técnicos</h2>
+            <pre>{{ details }}</pre>
+        </section>
+    </main>
+</body>
+</html>

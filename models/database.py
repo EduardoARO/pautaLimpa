@@ -5,6 +5,8 @@ Centraliza a conexão com o PostgreSQL usando variáveis de ambiente.
 """
 
 import os
+from urllib.parse import quote_plus
+
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.exc import OperationalError
@@ -12,7 +14,7 @@ from dotenv import load_dotenv
 
 from utils.logger import get_logger
 
-load_dotenv()
+load_dotenv(override=True)
 
 logger = get_logger(__name__)
 
@@ -32,6 +34,8 @@ def build_database_url() -> str:
     # Prioridade 1: URL completa já configurada
     database_url = os.getenv("DATABASE_URL")
     if database_url:
+        if database_url.startswith("postgresql://"):
+            database_url = database_url.replace("postgresql://", "postgresql+psycopg://", 1)
         return database_url
 
     # Prioridade 2: campos individuais
@@ -47,7 +51,22 @@ def build_database_url() -> str:
             "DB_HOST, DB_PORT, DB_NAME, DB_USER e DB_PASSWORD no .env"
         )
 
-    return f"postgresql+psycopg://{user}:{password}@{host}:{port}/{name}"
+    return (
+        f"postgresql+psycopg://{quote_plus(user)}:{quote_plus(password)}"
+        f"@{host}:{port}/{name}"
+    )
+
+
+def get_database_diagnostics() -> dict:
+    database_url = os.getenv("DATABASE_URL")
+    return {
+        "database_url_configured": bool(database_url),
+        "db_host": os.getenv("DB_HOST", "localhost"),
+        "db_port": os.getenv("DB_PORT", "5432"),
+        "db_name": os.getenv("DB_NAME"),
+        "db_user": os.getenv("DB_USER"),
+        "db_password_configured": bool(os.getenv("DB_PASSWORD")),
+    }
 
 
 # Cria a engine uma única vez (padrão Singleton implícito via módulo Python)
