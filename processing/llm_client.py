@@ -52,6 +52,28 @@ _RETRY_DELAY_PATTERN = re.compile(
 )
 
 # SQLs de persistência
+_NON_RETRYABLE_QUOTA_MARKERS = (
+    "insufficient_quota",
+    "quota exceeded",
+    "current quota",
+    "generaterequestsperdayperprojectpermodel-freetier",
+    "generativelanguage.googleapis.com/generate_content_free_tier_requests",
+)
+
+_AUTH_ERROR_MARKERS = (
+    "could not resolve authentication method",
+    "api key",
+    "auth_token",
+    "authorization",
+    "credentials",
+    "authentication",
+)
+
+_DEFERRED_PROVIDER_FAILURES = {
+    "QUOTA_EXCEEDED",
+    "AUTH_ERROR",
+}
+
 _UPSERT_IA_SQL = text("""
     INSERT INTO processamento_ia (
         fk_projeto, fk_versao_prompt, texto_limpo,
@@ -198,10 +220,14 @@ class AnthropicProvider:
     """Provedor de fallback: Anthropic Claude 3 Haiku."""
 
     def __init__(self) -> None:
+        api_key = (os.getenv("ANTHROPIC_API_KEY") or "").strip()
+        if not api_key:
+            raise ValueError("ANTHROPIC_API_KEY nao configurada.")
+
         try:
             import anthropic
             self._anthropic = anthropic
-            self.client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY", ""))
+            self.client = anthropic.Anthropic(api_key=api_key)
         except ImportError:
             raise ImportError(
                 "Pacote 'anthropic' não instalado. "
@@ -264,17 +290,59 @@ class LLMProcessor:
         text_lower = text.lower()
         return any(pattern in text_lower for pattern in _REFUSAL_PATTERNS)
 
-    def _call_with_retry(self, provider, messages: list[dict]) -> dict | None:
+    def _error_text(self, exc: Exception) -> str:
+        """Normaliza a mensagem da excecao para inspecao."""
+        parts = [str(exc)]
+
+        body = getattr(exc, "body", None)
+        if body:
+            parts.append(str(body))
+
+        response = getattr(exc, "response", None)
+        if response is not None:
+            response_text = getattr(response, "text", None)
+            if response_text:
+                parts.append(response_text)
+
+        return " ".join(part for part in parts if part)
+
+    def _is_non_retryable_rate_limit(self, exc: Exception) -> bool:
+        """Detecta cotas esgotadas em que esperar nao ajuda."""
+        error_text = self._error_text(exc).lower()
+        return any(marker in error_text for marker in _NON_RETRYABLE_QUOTA_MARKERS)
+
+    def _is_auth_error(self, exc: Exception) -> bool:
+        """Detecta erro de autenticacao/configuracao do provedor."""
+        status_code = getattr(exc, "status_code", None)
+        if status_code in (401, 403):
+            return True
+
+        error_text = self._error_text(exc).lower()
+        return any(marker in error_text for marker in _AUTH_ERROR_MARKERS)
+
+    def _should_defer_processing(self, reason: str | None) -> bool:
+        """Decide se a falha deve manter o item na fila para nova tentativa futura."""
+        return reason in _DEFERRED_PROVIDER_FAILURES
+
+    def _call_with_retry(self, provider, messages: list[dict]) -> tuple[dict | None, str | None]:
         """
         Chama um provedor com retry automático para 429 e 5xx.
 
         Returns:
-            dict com resultado ou None se todos os retries falharem.
+            Tupla (resultado, motivo_falha).
         """
+        failure_reason = None
         for attempt in range(1, _MAX_PRIMARY_ATTEMPTS + 1):
             try:
-                return provider.complete(messages)
+                return provider.complete(messages), None
             except openai.RateLimitError as exc:
+                if self._is_non_retryable_rate_limit(exc):
+                    logger.warning(
+                        "Quota esgotada no provedor %s; retries ignorados e fallback liberado.",
+                        provider.__class__.__name__,
+                    )
+                    return None, "QUOTA_EXCEEDED"
+
                 retry_wait = _RETRY_WAIT_SECONDS
                 match = _RETRY_DELAY_PATTERN.search(str(exc))
                 if match:
@@ -283,6 +351,7 @@ class LLMProcessor:
                     "Rate limit (429) no provedor %s | tentativa %d/%d | aguardando %ds.",
                     provider.__class__.__name__, attempt, _MAX_PRIMARY_ATTEMPTS, retry_wait,
                 )
+                failure_reason = "RATE_LIMIT_RETRY_EXHAUSTED"
                 time.sleep(retry_wait)
             except (openai.APIStatusError, Exception) as exc:
                 if hasattr(exc, "status_code") and getattr(exc, "status_code", 0) >= 500:
@@ -290,11 +359,18 @@ class LLMProcessor:
                         "Erro servidor no provedor %s [%s] | tentativa %d/%d | aguardando %ds.",
                         provider.__class__.__name__, exc, attempt, _MAX_PRIMARY_ATTEMPTS, _RETRY_WAIT_SECONDS,
                     )
+                    failure_reason = "SERVER_ERROR"
                     time.sleep(_RETRY_WAIT_SECONDS)
+                elif self._is_auth_error(exc):
+                    logger.error(
+                        "Erro de autenticacao/configuracao no provedor %s: %s",
+                        provider.__class__.__name__, exc,
+                    )
+                    return None, "AUTH_ERROR"
                 else:
                     logger.error("Erro inesperado no provedor %s: %s", provider.__class__.__name__, exc)
-                    return None
-        return None
+                    return None, "UNEXPECTED_ERROR"
+        return None, failure_reason or "RETRY_EXHAUSTED"
 
     def _save_result(
         self,
@@ -358,7 +434,7 @@ class LLMProcessor:
         messages, fk_versao_prompt = self._prompt_manager.build_messages(projeto_row)
 
         # Tentativa no provedor PRIMÁRIO
-        resultado = self._call_with_retry(self._primary, messages)
+        resultado, primary_failure = self._call_with_retry(self._primary, messages)
         status_ia = "SUCESSO"
         is_fallback = False
 
@@ -369,18 +445,30 @@ class LLMProcessor:
             if self._fallback is None:
                 try:
                     self._fallback = AnthropicProvider()
-                except ImportError:
-                    logger.error("Fallback indisponível (anthropic não instalado).")
-                    self._save_result(
-                        fk_projeto, fk_versao_prompt, texto_para_llm,
-                        None, "ERRO_LLM", processado_parcialmente, "QUARENTENA",
+                except (ImportError, ValueError) as exc:
+                    logger.error("Fallback indisponivel: %s", exc)
+                    logger.warning(
+                        "Nenhum provedor disponivel para id=%d; item mantido em AGUARDANDO_IA.",
+                        fk_projeto,
                     )
-                    return "ERRO_LLM"
+                    return "ADIADO_SEM_PROVEDOR"
 
-            resultado = self._call_with_retry(self._fallback, messages)
+            resultado, fallback_failure = self._call_with_retry(self._fallback, messages)
             is_fallback = True
+        else:
+            fallback_failure = None
 
         if resultado is None:
+            if (
+                self._should_defer_processing(primary_failure)
+                or self._should_defer_processing(fallback_failure)
+            ):
+                logger.warning(
+                    "Provedores indisponiveis para id=%d; item mantido em AGUARDANDO_IA.",
+                    fk_projeto,
+                )
+                return "ADIADO_SEM_PROVEDOR"
+
             logger.error("Todos os provedores falharam para id=%d.", fk_projeto)
             self._save_result(
                 fk_projeto, fk_versao_prompt, texto_para_llm,
@@ -428,10 +516,10 @@ class LLMProcessor:
             batch_size: Máximo de projetos por execução.
 
         Returns:
-            dict: {"processados": N, "sucesso": N, "quarentena": N, "erro": N}
+            dict: {"processados": N, "sucesso": N, "quarentena": N, "erro": N, "adiados": N}
         """
         logger.info("Iniciando processamento LLM (batch_size=%d)...", batch_size)
-        stats = {"processados": 0, "sucesso": 0, "quarentena": 0, "erro": 0}
+        stats = {"processados": 0, "sucesso": 0, "quarentena": 0, "erro": 0, "adiados": 0}
 
         with get_session() as session:
             rows = session.execute(_FETCH_QUEUE_SQL, {"limit": batch_size}).fetchall()
@@ -452,10 +540,16 @@ class LLMProcessor:
             elif status in ("RECUSA_MODELO", "ERRO_LLM"):
                 stats["quarentena"] += 1 if status == "RECUSA_MODELO" else 0
                 stats["erro"]       += 1 if status == "ERRO_LLM"      else 0
+            elif status == "ADIADO_SEM_PROVEDOR":
+                stats["adiados"] += 1
+                logger.warning(
+                    "Lote interrompido por indisponibilidade de provedor; itens restantes permanecem em AGUARDANDO_IA."
+                )
+                break
 
         logger.info(
-            "Processamento LLM concluído | processados=%d | sucesso=%d | quarentena=%d | erro=%d",
-            stats["processados"], stats["sucesso"], stats["quarentena"], stats["erro"],
+            "Processamento LLM concluído | processados=%d | sucesso=%d | quarentena=%d | erro=%d | adiados=%d",
+            stats["processados"], stats["sucesso"], stats["quarentena"], stats["erro"], stats["adiados"],
         )
         return stats
 
