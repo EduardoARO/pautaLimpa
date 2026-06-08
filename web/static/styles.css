@@ -18,23 +18,6 @@
   --shadow: 0 24px 80px rgba(29, 26, 22, 0.08);
 }
 
-:root[data-theme="dark"] {
-  color-scheme: dark;
-  --bg: #0f1115;
-  --surface: #171a21;
-  --surface-2: #222733;
-  --surface-glass: rgba(23, 26, 33, 0.88);
-  --heading-glass: rgba(23, 26, 33, 0.78);
-  --caption-bg: #f4f1ea;
-  --caption-text: #151515;
-  --button-text: #151515;
-  --text: #f4f1ea;
-  --muted: #a9a196;
-  --line: #2d3340;
-  --accent: #f4f1ea;
-  --shadow: 0 24px 80px rgba(0, 0, 0, 0.28);
-}
-
 * {
   box-sizing: border-box;
 }
@@ -82,11 +65,6 @@ body {
     sans-serif;
 }
 
-:root[data-theme="dark"] body {
-  background:
-    radial-gradient(circle at top left, rgba(72, 61, 44, 0.34) 0, transparent 34rem), var(--bg);
-}
-
 .shell {
   width: min(1180px, calc(100% - 32px));
   margin: 0 auto;
@@ -115,7 +93,7 @@ body {
   flex: 0 0 auto;
   border-radius: 0;
   background: transparent;
-  box-shadow:transparent;
+  box-shadow: transparent;
 }
 
 .logo-slot img {
@@ -238,42 +216,6 @@ button {
   font-weight: 800;
 }
 
-.theme-toggle {
-  display: grid;
-  place-items: center;
-  width: 46px;
-  height: 46px;
-  padding: 0;
-  border-radius: 999px;
-  white-space: nowrap;
-}
-
-.theme-icon {
-  grid-area: 1 / 1;
-  font-size: 20px;
-  line-height: 1;
-  transform: rotate(0deg) scale(1);
-  opacity: 1;
-  transition:
-    opacity 420ms ease,
-    transform 650ms ease;
-}
-
-.theme-icon-moon {
-  opacity: 0;
-  transform: rotate(-80deg) scale(0.45);
-}
-
-:root[data-theme="dark"] .theme-icon-sun {
-  opacity: 0;
-  transform: rotate(80deg) scale(0.45);
-}
-
-:root[data-theme="dark"] .theme-icon-moon {
-  opacity: 1;
-  transform: rotate(0deg) scale(1);
-}
-
 .stats span {
   padding: 8px 10px;
   border-radius: 999px;
@@ -352,15 +294,6 @@ button {
   justify-content: space-between;
   gap: 20px;
   padding: 26px 28px 18px;
-}
-
-.law-id {
-  margin: 0 0 8px;
-  color: var(--muted);
-  font-size: 13px;
-  font-weight: 850;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
 }
 
 h3 {
@@ -447,8 +380,95 @@ h3 {
   color: var(--caption-text);
 }
 
+.carousel-intro {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.carousel-hint {
+  margin: 0;
+  color: color-mix(in srgb, currentColor 62%, transparent);
+  font-size: 13px;
+}
+
+.analysis-carousel {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 82%;
+  gap: 14px;
+  align-items: stretch;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  scroll-padding-inline: clamp(16px, 11vw, 90px);
+  padding: 0 clamp(16px, 11vw, 90px) 8px;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  cursor: grab;
+  touch-action: pan-y;
+}
+
+.analysis-carousel::-webkit-scrollbar {
+  display: none;
+}
+
+.analysis-slide {
+  scroll-snap-align: center;
+  padding: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.analysis-carousel:active {
+  cursor: grabbing;
+}
+
+.analysis-carousel.is-dragging {
+  cursor: grabbing;
+  user-select: none;
+}
+
+.analysis-carousel.is-dragging * {
+  user-select: none;
+}
+
+.analysis-slide-head {
+  margin-bottom: 10px;
+}
+
+.analysis-slide-head h4 {
+  margin: 0;
+  font-size: 18px;
+  line-height: 1.1;
+}
+
+.analysis-slide-body {
+  display: grid;
+  gap: 10px;
+}
+
+.analysis-card-imparcial {
+  border-left: 4px solid #0036aa;
+}
+
+.analysis-card-direita {
+  border-left: 4px solid #eaed3a;
+}
+
+.analysis-card-esquerda {
+  border-left: 4px solid #09c702;
+}
+
+.analysis-card pre {
+  font-size: 15px;
+  line-height: 1.6;
+}
+
 .caption .panel-label,
-.caption-footer {
+.caption-footer,
+.carousel-hint {
   color: color-mix(in srgb, currentColor 62%, transparent);
 }
 
@@ -520,7 +540,55 @@ code {
     grid-template-columns: 1fr;
   }
 
+  .panel,
+  .card-footer {
+    padding-left: 18px;
+    padding-right: 18px;
+  }
+
+  .analysis-carousel {
+    grid-auto-columns: 86%;
+    scroll-padding-inline: 18px;
+    padding-inline: 18px;
+  }
+
+  .analysis-slide {
+    border-radius: 16px;
+  }
+
+  .analysis-slide-head,
+  .analysis-slide-body {
+    padding-left: 0;
+    padding-right: 0;
+  }
+
   .links {
     margin-left: 0;
+  }
+}
+
+@media (max-width: 430px) {
+  .shell {
+    width: min(1180px, calc(100% - 20px));
+    padding-top: 24px;
+  }
+
+  .toolbar,
+  .card,
+  .empty {
+    border-radius: 18px;
+  }
+
+  .panel {
+    padding: 16px;
+  }
+
+  .analysis-slide {
+    border-radius: 16px;
+  }
+
+  pre {
+    font-size: 15px;
+    line-height: 1.6;
   }
 }

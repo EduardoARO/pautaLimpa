@@ -58,9 +58,14 @@ _FETCH_MIDIA_QUEUE_SQL = text("""
         pb.sigla_tipo,
         pb.numero,
         pb.ano,
-        pia.texto_traduzido AS caption
+        COALESCE(ai.texto_traduzido, pia.texto_traduzido) AS caption
     FROM projetos_brutos pb
-    JOIN processamento_ia pia ON pia.fk_projeto = pb.id
+    LEFT JOIN analises_ia ai
+        ON ai.fk_projeto = pb.id
+       AND ai.tipo_analise = 'IMPARCIAL'
+    LEFT JOIN processamento_ia pia
+        ON pia.fk_projeto = pb.id
+       AND ai.id IS NULL
     WHERE pb.status_processamento = 'AGUARDANDO_MIDIA'
     ORDER BY pb.data_captura ASC
     LIMIT :limit

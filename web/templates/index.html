@@ -1,113 +1,187 @@
 <!doctype html>
 <html lang="pt-BR">
-<head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>PautaLimpa</title>
-    <link rel="icon" href="{{ url_for('static', filename='logo.png') }}">
-    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
-</head>
-<body>
+    <link rel="icon" href="{{ url_for('static', filename='logo.png') }}" />
+    <link
+      rel="stylesheet"
+      href="{{ url_for('static', filename='styles.css') }}"
+    />
+  </head>
+  <body>
     <main class="shell">
-        <header class="hero">
-            <div class="brand">
-                <div class="logo-slot">
-                    <img src="{{ url_for('static', filename='logo.png') }}" alt="PautaLimpa" onerror="this.style.display='none'; this.nextElementSibling.style.display='grid';">
-                    <span>PL</span>
-                </div>
-                <div>
-                    <p class="eyebrow">PautaLimpa</p>
-                    <h2>A realidade transparente para você.</h2>
-                </div>
+      <header class="hero">
+        <div class="brand">
+          <div class="logo-slot">
+            <img
+              src="{{ url_for('static', filename='logo.png') }}"
+              alt="PautaLimpa"
+              onerror="
+                this.style.display = 'none';
+                this.nextElementSibling.style.display = 'grid';
+              "
+            />
+            <span>PL</span>
+          </div>
+          <div>
+            <p class="eyebrow">PautaLimpa</p>
+            <h2>A realidade transparente para você.</h2>
+          </div>
+        </div>
+      </header>
+
+      <section class="toolbar">
+        <form method="get" class="filters">
+          <label>
+            De
+            <input type="date" name="date_from" value="{{ date_from }}" />
+          </label>
+          <label>
+            Até
+            <input type="date" name="date_to" value="{{ date_to }}" />
+          </label>
+          <label>
+            Tema
+            <input
+              type="search"
+              name="theme"
+              placeholder="Ex: saúde, etc"
+              value="{{ theme }}"
+            />
+          </label>
+          <button type="submit">Atualizar</button>
+        </form>
+      </section>
+
+      {% if not groups %}
+      <section class="empty">
+        <h2>Nenhum item encontrado</h2>
+      </section>
+      {% endif %} {% for date_label, items in groups.items() %}
+      <details class="date-group" open>
+        <summary class="date-heading">
+          <h2>{{ date_label }}</h2>
+          <span>{{ items|length }} item(ns)</span>
+        </summary>
+
+        <div class="grid">
+          {% for item in items %}
+          <article class="card">
+            <div class="card-top">
+              <div>
+                <h3>{{ item.ementa }}</h3>
+              </div>
             </div>
-            <button type="button" class="theme-toggle" aria-label="Alternar tema" data-theme-toggle>
-                <span class="theme-icon theme-icon-sun">☀</span>
-                <span class="theme-icon theme-icon-moon">☾</span>
-            </button>
-        </header>
 
-        <section class="toolbar">
-            <form method="get" class="filters">
-                <label>
-                    De
-                    <input type="date" name="date_from" value="{{ date_from }}">
-                </label>
-                <label>
-                    Até
-                    <input type="date" name="date_to" value="{{ date_to }}">
-                </label>
-                <label>
-                    Tema
-                    <input type="search" name="theme" placeholder="Ex: saúde, etc" value="{{ theme }}">
-                </label>
-                <label>
-                    Limite
-                    <input type="number" name="limit" min="1" max="500" value="{{ limit }}">
-                </label>
-                <button type="submit">Atualizar</button>
-            </form>
-        </section>
-
-        {% if not groups %}
-            <section class="empty">
-                <h2>Nenhum item encontrado</h2>
-                <p>Rode <code>python -m ingestion.extractor</code> e depois <code>python -m processing.llm_client</code>.</p>
-            </section>
-        {% endif %}
-
-        {% for date_label, items in groups.items() %}
-            <details class="date-group" open>
-                <summary class="date-heading">
-                    <h2>{{ date_label }}</h2>
-                    <span>{{ items|length }} item(ns)</span>
-                </summary>
-
-                <div class="grid">
-                    {% for item in items %}
-                        <article class="card">
-                            <div class="card-top">
-                                <div>
-                                    <p class="law-id">{{ item.title }}</p>
-                                    <h3>{{ item.ementa }}</h3>
-                                </div>
-                            </div>
-
-                            <div class="columns">
-                                <section class="panel source">
-                                    <p class="panel-label">Ementa original</p>
-                                    <p>{{ item.ementa }}</p>
-                                </section>
-                                <section class="panel caption">
-                                    <p class="panel-label">Texto editorial</p>
-                                    <pre>{{ item.caption }}</pre>
-                                </section>
-                            </div>
-
-                            <footer class="card-footer">
-                                <span>Data de apresentação: {{ item.data_apresentacao }}</span>
-                                <div class="links">
-                                    {% if item.link_oficial %}<a href="{{ item.link_oficial }}" target="_blank">Câmara</a>{% endif %}
-                                    {% if item.url_inteiro_teor %}<a href="{{ item.url_inteiro_teor }}" target="_blank">Inteiro teor</a>{% endif %}
-                                </div>
-                            </footer>
-                        </article>
-                    {% endfor %}
+            <div class="columns">
+              <section class="panel source">
+                <p class="panel-label">Ementa original</p>
+                <p>{{ item.ementa }}</p>
+              </section>
+              <section class="panel caption">
+                <div class="carousel-intro">
+                  <p class="panel-label">Análises de IA</p>
+                  <p class="carousel-hint">
+                    Arraste para ver as três leituras: esquerda, imparcial e direita. A visão imparcial abre centralizada.
+                  </p>
                 </div>
-            </details>
-        {% endfor %}
+                <div class="analysis-carousel" aria-label="Carrossel de análises ideológicas" data-analysis-carousel>
+                  {% for analysis in item.analysis_order %}
+                  <article class="analysis-slide analysis-card-{{ analysis.key|lower }}">
+                    <div class="analysis-slide-head">
+                      <h4>{{ analysis.key|capitalize }}</h4>
+                    </div>
+                    <div class="analysis-slide-body">
+                      <pre>{{ analysis.texto }}</pre>
+                    </div>
+                  </article>
+                  {% endfor %}
+                </div>
+              </section>
+            </div>
+
+            <footer class="card-footer">
+              <span>Data de apresentação: {{ item.data_apresentacao }}</span>
+              <div class="links">
+                {% if item.link_oficial %}<a
+                  href="{{ item.link_oficial }}"
+                  target="_blank"
+                  >Câmara</a
+                >{% endif %} {% if item.url_inteiro_teor %}<a
+                  href="{{ item.url_inteiro_teor }}"
+                  target="_blank"
+                  >Inteiro teor</a
+                >{% endif %}
+              </div>
+            </footer>
+          </article>
+          {% endfor %}
+        </div>
+      </details>
+      {% endfor %}
     </main>
     <script>
-        const themeToggle = document.querySelector("[data-theme-toggle]");
-        const savedTheme = localStorage.getItem("pautalimpa-theme");
-        const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-        const initialTheme = savedTheme || (prefersDark ? "dark" : "light");
+      document.addEventListener('DOMContentLoaded', () => {
+        document.querySelectorAll('[data-analysis-carousel]').forEach((carousel) => {
+          const slides = carousel.querySelectorAll('.analysis-slide');
+          const middle = slides[1];
+          const centerMiddle = () => {
+            if (!middle) return;
+            const targetLeft = middle.offsetLeft - (carousel.clientWidth - middle.offsetWidth) / 2;
+            carousel.scrollTo({ left: Math.max(0, targetLeft), behavior: 'auto' });
+          };
 
-        document.documentElement.dataset.theme = initialTheme;
-        themeToggle.addEventListener("click", () => {
-            const nextTheme = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
-            document.documentElement.dataset.theme = nextTheme;
-            localStorage.setItem("pautalimpa-theme", nextTheme);
+          let isDragging = false;
+          let startX = 0;
+          let startScrollLeft = 0;
+          let activePointerId = null;
+
+          const stopDragging = () => {
+            isDragging = false;
+            activePointerId = null;
+            carousel.classList.remove('is-dragging');
+          };
+
+          carousel.addEventListener('pointerdown', (event) => {
+            if (event.pointerType === 'mouse' && event.button !== 0) {
+              return;
+            }
+            isDragging = true;
+            activePointerId = event.pointerId;
+            startX = event.clientX;
+            startScrollLeft = carousel.scrollLeft;
+            carousel.classList.add('is-dragging');
+            if (carousel.setPointerCapture) {
+              carousel.setPointerCapture(event.pointerId);
+            }
+          });
+
+          window.addEventListener('pointermove', (event) => {
+            if (!isDragging || event.pointerId !== activePointerId) return;
+            event.preventDefault();
+            const deltaX = event.clientX - startX;
+            carousel.scrollLeft = startScrollLeft - deltaX;
+          }, { passive: false });
+
+          const finishDrag = (event) => {
+            if (!isDragging) return;
+            if (event && activePointerId !== null && carousel.hasPointerCapture && carousel.hasPointerCapture(activePointerId)) {
+              carousel.releasePointerCapture(activePointerId);
+            }
+            stopDragging();
+          };
+
+          window.addEventListener('pointerup', finishDrag);
+          window.addEventListener('pointercancel', finishDrag);
+          carousel.addEventListener('lostpointercapture', stopDragging);
+
+          requestAnimationFrame(() => requestAnimationFrame(centerMiddle));
+          window.addEventListener('load', centerMiddle, { once: true });
+          window.addEventListener('resize', centerMiddle);
         });
+      });
     </script>
-</body>
+  </body>
 </html>

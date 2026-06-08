@@ -16,6 +16,8 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 from dotenv import load_dotenv
+from collections import defaultdict
+
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -52,18 +54,29 @@ _REFUSAL_PHRASES = [
     "não posso fornecer",
 ]
 
+_ANALYSIS_ORDER = ("IMPARCIAL", "DIREITA", "ESQUERDA")
+
 _FETCH_QUARANTINE_CANDIDATES_SQL = text("""
     SELECT
         pb.id          AS projeto_id,
         pb.sigla_tipo,
         pb.numero,
         pb.ano,
-        pia.texto_traduzido
+        COALESCE(ai.tipo_analise::text, 'IMPARCIAL') AS tipo_analise,
+        COALESCE(ai.texto_traduzido, pia.texto_traduzido) AS texto_traduzido,
+        COALESCE(ai.status_ia::text, pia.status_ia::text, 'PENDENTE') AS status_ia
     FROM projetos_brutos pb
-    JOIN processamento_ia pia ON pia.fk_projeto = pb.id
+    LEFT JOIN analises_ia ai
+        ON ai.fk_projeto = pb.id
+    LEFT JOIN processamento_ia pia
+        ON pia.fk_projeto = pb.id
+       AND ai.id IS NULL
     WHERE pb.status_processamento = 'AGUARDANDO_MIDIA'
-      AND pia.status_ia IN ('SUCESSO', 'FALLBACK_UTILIZADO')
-      AND pia.texto_traduzido IS NOT NULL
+      AND (
+        ai.id IS NOT NULL
+        OR pia.id IS NOT NULL
+      )
+    ORDER BY pb.id DESC, tipo_analise
 """)
 
 _UPDATE_STATUS_SQL = text("""
@@ -108,6 +121,20 @@ def _is_refusal(texto: str) -> bool:
     return any(phrase in texto_lower for phrase in _REFUSAL_PHRASES)
 
 
+def _get_analysis_status(projeto_id: int, tipo_analise: str) -> str:
+    with get_session() as session:
+        row = session.execute(
+            text("""
+                SELECT status_ia
+                FROM analises_ia
+                WHERE fk_projeto = :projeto_id
+                  AND tipo_analise = :tipo_analise
+            """),
+            {"projeto_id": projeto_id, "tipo_analise": tipo_analise},
+        ).fetchone()
+    return row.status_ia if row else "PENDENTE"
+
+
 class QuarantineValidator:
     """
     Percorre projetos em AGUARDANDO_MIDIA e valida a saida da LLM.
@@ -126,26 +153,62 @@ class QuarantineValidator:
         with get_session() as session:
             rows = session.execute(_FETCH_QUARANTINE_CANDIDATES_SQL).fetchall()
 
+        grouped = defaultdict(dict)
+        meta = {}
         for row in rows:
+            meta[row.projeto_id] = row
+            grouped[row.projeto_id][row.tipo_analise] = row.texto_traduzido or ""
+
+        for projeto_id, analyses in grouped.items():
+            row = meta[projeto_id]
             stats["validados"] += 1
-            texto = row.texto_traduzido or ""
-            motivo = None
+            motivos = []
 
-            if _is_refusal(texto):
-                motivo = "Recusa do modelo detectada no texto gerado"
-            elif not _has_valid_citation(texto):
-                motivo = "Citacao obrigatoria ausente (Regra 4 violada)"
+            has_new_flow = any(
+                _get_analysis_status(row.projeto_id, tipo_analise) != "PENDENTE"
+                for tipo_analise in _ANALYSIS_ORDER
+            )
+
+            if has_new_flow:
+                for tipo_analise in _ANALYSIS_ORDER:
+                    texto = analyses.get(tipo_analise, "")
+                    status_ia = _get_analysis_status(row.projeto_id, tipo_analise)
+
+                    if status_ia == "PENDENTE":
+                        motivos.append(f"Analise ausente: {tipo_analise}")
+                        continue
+                    if status_ia not in ("SUCESSO", "FALLBACK_UTILIZADO"):
+                        motivos.append(f"{tipo_analise}: status IA inválido ({status_ia})")
+                        continue
+                    if not texto:
+                        motivos.append(f"Analise vazia: {tipo_analise}")
+                        continue
+                    if _is_refusal(texto):
+                        motivos.append(f"Recusa do modelo em {tipo_analise}")
+                        continue
+                    if not _has_valid_citation(texto):
+                        motivos.append(f"Citacao obrigatoria ausente em {tipo_analise}")
+                        continue
+                    comprimento_valido, motivo_comprimento = _has_valid_length(texto)
+                    if not comprimento_valido:
+                        motivos.append(f"{tipo_analise}: {motivo_comprimento}")
             else:
-                comprimento_valido, motivo_comprimento = _has_valid_length(texto)
-                if not comprimento_valido:
-                    motivo = motivo_comprimento
+                texto = next(iter(analyses.values()), "")
+                if _is_refusal(texto):
+                    motivos.append("Recusa do modelo detectada no texto gerado")
+                elif not _has_valid_citation(texto):
+                    motivos.append("Citacao obrigatoria ausente (Regra 4 violada)")
+                else:
+                    comprimento_valido, motivo_comprimento = _has_valid_length(texto)
+                    if not comprimento_valido:
+                        motivos.append(motivo_comprimento)
 
-            if motivo:
-                self._quarantine(row.projeto_id, motivo)
+            if motivos:
+                self._quarantine(row.projeto_id, "; ".join(motivos))
                 stats["quarentena"] += 1
                 logger.warning(
                     "QUARENTENA | id=%d | %s %s/%s | motivo: %s",
-                    row.projeto_id, row.sigla_tipo, row.numero, row.ano, motivo,
+                    row.projeto_id, row.sigla_tipo, row.numero, row.ano, "; ".join(motivos),
                 )
             else:
                 stats["aprovados"] += 1

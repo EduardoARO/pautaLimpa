@@ -19,6 +19,7 @@ _FETCH_PROMPT_SQL = text("""
     SELECT id, versao, system_prompt
     FROM historico_prompt
     WHERE ativo = TRUE
+      AND tipo_analise = :tipo_analise
     LIMIT 1
 """)
 
@@ -54,38 +55,39 @@ class PromptManager:
     """
 
     def __init__(self) -> None:
-        self._cached_prompt: dict | None = None
+        self._cached_prompt: dict[str, dict] = {}
 
-    def _load_active_prompt(self) -> dict:
+    def _load_active_prompt(self, tipo_analise: str) -> dict:
         """Busca a versao ativa do System Prompt no banco."""
         with get_session() as session:
-            result = session.execute(_FETCH_PROMPT_SQL).fetchone()
+            result = session.execute(_FETCH_PROMPT_SQL, {"tipo_analise": tipo_analise}).fetchone()
 
         if not result:
             raise RuntimeError(
-                "Nenhum System Prompt ativo encontrado na tabela historico_prompt. "
-                "Execute o schema.sql para inserir o prompt padrao."
+                f"Nenhum System Prompt ativo encontrado na tabela historico_prompt para tipo_analise={tipo_analise}. "
+                "Execute o schema.sql e o script update_prompt.py para inserir o prompt padrao."
             )
 
         return {"id": result.id, "versao": result.versao, "system_prompt": result.system_prompt}
 
-    def get_active_prompt(self) -> dict:
+    def get_active_prompt(self, tipo_analise: str = "IMPARCIAL") -> dict:
         """
         Retorna o prompt ativo com cache em memoria.
 
         Returns:
             dict: {"id": int, "versao": str, "system_prompt": str}
         """
-        if self._cached_prompt is None:
-            self._cached_prompt = self._load_active_prompt()
+        if tipo_analise not in self._cached_prompt:
+            self._cached_prompt[tipo_analise] = self._load_active_prompt(tipo_analise)
             logger.info(
-                "System Prompt carregado: versao %s (id=%d)",
-                self._cached_prompt["versao"],
-                self._cached_prompt["id"],
+                "System Prompt carregado: tipo=%s | versao %s (id=%d)",
+                tipo_analise,
+                self._cached_prompt[tipo_analise]["versao"],
+                self._cached_prompt[tipo_analise]["id"],
             )
-        return self._cached_prompt
+        return self._cached_prompt[tipo_analise]
 
-    def build_messages(self, projeto: dict) -> tuple[list[dict], int]:
+    def build_messages(self, projeto: dict, tipo_analise: str = "IMPARCIAL") -> tuple[list[dict], int]:
         """
         Monta a lista de mensagens no formato OpenAI Chat Completions.
 
@@ -97,7 +99,7 @@ class PromptManager:
               - list[dict]: Messages no formato [{"role": "system", ...}, {"role": "user", ...}]
               - int: ID da versao do prompt (para gravar em processamento_ia.fk_versao_prompt)
         """
-        prompt_data = self.get_active_prompt()
+        prompt_data = self.get_active_prompt(tipo_analise)
 
         user_content = _USER_PROMPT_TEMPLATE.format(
             sigla_tipo=projeto.get("sigla_tipo", "PL"),
@@ -116,5 +118,5 @@ class PromptManager:
 
     def invalidate_cache(self) -> None:
         """Forca recarga do prompt na proxima chamada (usar apos atualizar o banco)."""
-        self._cached_prompt = None
+        self._cached_prompt = {}
         logger.info("Cache do System Prompt invalidado.")

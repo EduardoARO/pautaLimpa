@@ -24,3 +24,8 @@ __pycache__/
 dist/
 build/
 *.egg-info/
+
+# Frontend Next.js build/cache
+frontend/.next/
+pack.gz
+webpack

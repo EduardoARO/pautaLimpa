@@ -43,28 +43,60 @@ CREATE TYPE status_publicacao_enum AS ENUM (
     'CANCELADO'           -- Cancelado manualmente antes da publicação
 );
 
+DO $$
+BEGIN
+    CREATE TYPE tipo_analise_enum AS ENUM (
+        'IMPARCIAL',
+        'DIREITA',
+        'ESQUERDA'
+    );
+EXCEPTION
+    WHEN duplicate_object THEN NULL;
+END $$;
+
 
 -- =============================================================================
 -- TABELA 1: historico_prompt
--- Versões imutáveis do System Prompt das 4 Regras de Negócio.
+-- Versões imutáveis dos System Prompts por tipo de análise.
 -- Cada processamento referencia a versão exata ativa no momento (Épico 6).
 -- =============================================================================
 CREATE TABLE IF NOT EXISTS historico_prompt (
     id               BIGSERIAL PRIMARY KEY,
     versao           VARCHAR(20)  NOT NULL,        -- ex: "v1.0.0", "v1.1.0"
     descricao        TEXT,                         -- changelog da versão
+    tipo_analise     tipo_analise_enum NOT NULL DEFAULT 'IMPARCIAL',
     system_prompt    TEXT         NOT NULL,        -- conteúdo completo do prompt
     ativo            BOOLEAN      NOT NULL DEFAULT TRUE,
     criado_em        TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
 
-    CONSTRAINT uq_prompt_versao UNIQUE (versao)
+    CONSTRAINT uq_prompt_versao UNIQUE (versao, tipo_analise)
 );
 
-COMMENT ON TABLE historico_prompt IS 'Controle de versão imutável dos System Prompts da LLM (auditoria Épico 6).';
+COMMENT ON TABLE historico_prompt IS 'Controle de versão imutável dos System Prompts da LLM por tipo de análise (auditoria Épico 6).';
+
+ALTER TABLE IF EXISTS historico_prompt
+    ADD COLUMN IF NOT EXISTS tipo_analise tipo_analise_enum NOT NULL DEFAULT 'IMPARCIAL';
+
+UPDATE historico_prompt
+SET tipo_analise = COALESCE(tipo_analise, 'IMPARCIAL');
+
+ALTER TABLE IF EXISTS historico_prompt
+    DROP CONSTRAINT IF EXISTS uq_prompt_versao;
+
+ALTER TABLE IF EXISTS historico_prompt
+    DROP CONSTRAINT IF EXISTS uq_prompt_versao_tipo;
+
+ALTER TABLE IF EXISTS historico_prompt
+    ADD CONSTRAINT uq_prompt_versao_tipo UNIQUE (versao, tipo_analise);
 
 -- Apenas uma versão pode estar ativa por vez
-CREATE UNIQUE INDEX IF NOT EXISTS idx_hp_ativo_unico
-    ON historico_prompt (ativo) WHERE ativo = TRUE;
+DROP INDEX IF EXISTS idx_hp_ativo_unico;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_hp_ativo_tipo_unico
+    ON historico_prompt (tipo_analise) WHERE ativo = TRUE;
+
+CREATE INDEX IF NOT EXISTS idx_hp_tipo_analise
+    ON historico_prompt (tipo_analise);
 
 
 -- =============================================================================
@@ -173,6 +205,58 @@ COMMENT ON COLUMN processamento_ia.processado_parcialmente IS 'TRUE se o texto f
 CREATE INDEX IF NOT EXISTS idx_pia_fk_projeto    ON processamento_ia (fk_projeto);
 CREATE INDEX IF NOT EXISTS idx_pia_status_ia     ON processamento_ia (status_ia);
 CREATE INDEX IF NOT EXISTS idx_pia_versao_prompt ON processamento_ia (fk_versao_prompt);
+
+
+-- =============================================================================
+-- TABELA 3B: analises_ia
+-- Resultado do processamento LLM por projeto e por tipo de análise.
+-- Relação: 1 projeto_bruto → 0..3 analises_ia
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS analises_ia (
+    id                    BIGSERIAL PRIMARY KEY,
+
+    fk_projeto            BIGINT         NOT NULL
+        REFERENCES projetos_brutos (id) ON DELETE CASCADE,
+
+    tipo_analise          tipo_analise_enum NOT NULL DEFAULT 'IMPARCIAL',
+
+    -- FK para a versão do System Prompt usada (rastreabilidade Épico 6)
+    fk_versao_prompt      BIGINT
+        REFERENCES historico_prompt (id) ON DELETE SET NULL,
+
+    -- Texto após sanitização (HTML removido, UTF-8 normalizado)
+    texto_limpo           TEXT,
+
+    -- Saída da LLM: texto para cada perspectiva/análise
+    texto_traduzido       TEXT,
+
+    -- Status do processamento LLM
+    status_ia             status_ia_enum NOT NULL DEFAULT 'PENDENTE',
+
+    -- Tokens consumidos separados para controle de custo (Épico 5 — FinOps)
+    prompt_tokens         INTEGER        CHECK (prompt_tokens >= 0),
+    completion_tokens     INTEGER        CHECK (completion_tokens >= 0),
+
+    -- Modelo efetivamente utilizado (principal ou fallback)
+    modelo_llm            VARCHAR(100),
+
+    -- Indica se o texto foi truncado por exceder o limite de tokens
+    processado_parcialmente BOOLEAN      NOT NULL DEFAULT FALSE,
+
+    data_processamento    TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
+    data_atualizacao      TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
+
+    CONSTRAINT uq_analises_projeto_tipo UNIQUE (fk_projeto, tipo_analise)
+);
+
+COMMENT ON TABLE analises_ia IS 'Resultado do processamento via LLM separado por tipo de análise; referencia a versão do prompt usada para auditoria.';
+COMMENT ON COLUMN analises_ia.tipo_analise IS 'Classificação da leitura gerada pela IA: IMPARCIAL, DIREITA ou ESQUERDA.';
+COMMENT ON COLUMN analises_ia.processado_parcialmente IS 'TRUE se o texto foi truncado por exceder o context window da LLM.';
+
+CREATE INDEX IF NOT EXISTS idx_ai_fk_projeto    ON analises_ia (fk_projeto);
+CREATE INDEX IF NOT EXISTS idx_ai_tipo_analise  ON analises_ia (tipo_analise);
+CREATE INDEX IF NOT EXISTS idx_ai_status_ia     ON analises_ia (status_ia);
+CREATE INDEX IF NOT EXISTS idx_ai_versao_prompt ON analises_ia (fk_versao_prompt);
 
 
 -- =============================================================================

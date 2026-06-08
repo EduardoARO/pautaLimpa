@@ -3,6 +3,7 @@ pipeline/scheduler.py
 Épico 3 — Gatilho Temporal (Cron Job) via APScheduler.
 
 Agenda:
+  - Ingestão horária + Processamento IA: de hora em hora (minute=0)
   - Extração + Processamento + Publicação: diariamente às 18h00 (horário configurável)
   - Coleta de Métricas de Engajamento: diariamente às 10h00 (posts de ontem)
   - Limpeza de arquivos e logs antigos: diariamente às 02h00 (madrugada)
@@ -38,6 +39,32 @@ _BACKUP_HOUR    = int(os.getenv("SCHEDULE_BACKUP_HOUR", "3"))
 
 # Fuso horário da publicação
 _TIMEZONE = os.getenv("SCHEDULER_TIMEZONE", "America/Sao_Paulo")
+_INGEST_INTERVAL_MINUTES = int(os.getenv("INGEST_INTERVAL_MINUTES", "60"))
+_RUN_INGEST_ON_START = os.getenv("RUN_INGEST_ON_START", "true").lower() == "true"
+
+
+def job_ingestao_horaria() -> None:
+    """Job horário: executa ingestão e processamento IA sem publicar."""
+    logger.info("SCHEDULER: iniciando job_ingestao_horaria...")
+    try:
+        from pipeline.hourly_cycle import run_ingest_and_process_once
+
+        stats = run_ingest_and_process_once()
+        logger.info("SCHEDULER: ciclo horário concluído | %s", stats)
+    except Exception as exc:
+        logger.error("SCHEDULER: erro no job_ingestao_horaria: %s", exc, exc_info=True)
+
+
+def job_ingestao_drain_inicial() -> None:
+    """Executa o ciclo de drenagem completo logo na inicialização."""
+    logger.info("SCHEDULER: iniciando job_ingestao_drain_inicial...")
+    try:
+        from pipeline.hourly_cycle import run_until_drained
+
+        stats = run_until_drained()
+        logger.info("SCHEDULER: drain inicial concluído | %s", stats)
+    except Exception as exc:
+        logger.error("SCHEDULER: erro no job_ingestao_drain_inicial: %s", exc, exc_info=True)
 
 
 def job_pipeline_completo() -> None:
@@ -86,6 +113,16 @@ def start_scheduler() -> None:
     """Inicializa e bloqueia o processo com todos os jobs agendados."""
     scheduler = BlockingScheduler(timezone=_TIMEZONE)
 
+    # Ciclo horário (ingestão + IA) — executa no início de cada hora
+    scheduler.add_job(
+        job_ingestao_horaria,
+        trigger=CronTrigger(minute=0, timezone=_TIMEZONE),
+        id="ingestao_horaria",
+        name="Ingestão horária + processamento IA",
+        misfire_grace_time=300,
+        coalesce=True,
+    )
+
     # Pipeline principal (extração + IA + publicação) — pico orgânico do Instagram
     scheduler.add_job(
         job_pipeline_completo,
@@ -128,12 +165,17 @@ def start_scheduler() -> None:
 
     logger.info("=" * 60)
     logger.info("PautaLimpa Scheduler iniciado | fuso=%s", _TIMEZONE)
+    logger.info("Ingestão horária:     a cada %d minuto(s) (cron minute=0)", _INGEST_INTERVAL_MINUTES)
     logger.info("Pipeline principal: %02dh%02d diariamente", _PUBLISH_HOUR, _PUBLISH_MINUTE)
     logger.info("Métricas:           %02dh%02d diariamente", _METRICS_HOUR, _METRICS_MINUTE)
     logger.info("Limpeza:            %02dh00 diariamente", _CLEANUP_HOUR)
     logger.info("Backup:             %02dh00 diariamente", _BACKUP_HOUR)
     logger.info("Pressione Ctrl+C para encerrar.")
     logger.info("=" * 60)
+
+    if _RUN_INGEST_ON_START:
+        logger.info("SCHEDULER: executando drain inicial imediatamente ao iniciar...")
+        job_ingestao_drain_inicial()
 
     try:
         scheduler.start()
