@@ -1,16 +1,8 @@
-const { existsSync } = require("fs");
-const path = require("path");
 const { spawn } = require("child_process");
 
 const frontendRoot = __dirname;
 const port = process.env.PORT || "3000";
 const hostname = process.env.HOSTNAME || "0.0.0.0";
-const standaloneServer = path.join(
-  frontendRoot,
-  ".next",
-  "standalone",
-  "server.js",
-);
 const nextCli = require.resolve("next/dist/bin/next");
 
 function run(command, args) {
@@ -34,17 +26,12 @@ function run(command, args) {
   });
 }
 
-if (existsSync(standaloneServer)) {
-  console.log("[pautalimpa-frontend] iniciando Next standalone");
-  run(process.execPath, [standaloneServer]);
-} else {
-  console.log("[pautalimpa-frontend] iniciando Next via next start");
-  run(process.execPath, [
-    nextCli,
-    "start",
-    "--hostname",
-    hostname,
-    "--port",
-    port,
-  ]);
-}
+console.log("[pautalimpa-frontend] iniciando Next via next start");
+run(process.execPath, [
+  nextCli,
+  "start",
+  "--hostname",
+  hostname,
+  "--port",
+  port,
+]);
