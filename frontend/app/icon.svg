@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none" role="img" aria-label="PautaLimpa">
+  <defs>
+    <linearGradient id="g" x1="8" y1="8" x2="56" y2="56" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0f766e"/>
+      <stop offset="1" stop-color="#155e75"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="url(#g)"/>
+  <circle cx="32" cy="24" r="10" fill="#ffffff" fill-opacity="0.14"/>
+  <path d="M21 40c4-7 8-10 11-10s7 3 11 10" stroke="#ffffff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M26 17h12" stroke="#ffffff" stroke-width="4" stroke-linecap="round"/>
+  <path d="M26 23h8" stroke="#ffffff" stroke-width="4" stroke-linecap="round"/>
+  <text x="32" y="46" text-anchor="middle" font-family="Arial, sans-serif" font-size="12" font-weight="700" fill="#ffffff">PL</text>
+</svg>

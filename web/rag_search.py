@@ -3,6 +3,7 @@
 Recuperação semântica para a busca por tema na UI.
 A consulta deixa de ser keyword search e passa a ranquear os itens pelo
 acoplamento semântico entre o tema digitado e o conteúdo do projeto.
+Os embeddings agora vêm do Ollama local para manter custo zero no RAG.
 """
 
 from __future__ import annotations
@@ -13,46 +14,54 @@ import re
 from collections import defaultdict
 from functools import lru_cache
 
-import openai
+import requests
 
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-_RAG_EMBEDDING_MODEL = os.getenv("RAG_EMBEDDING_MODEL", "text-embedding-3-small")
+_OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
+_OLLAMA_EMBEDDING_MODEL = os.getenv("OLLAMA_EMBEDDING_MODEL", "nomic-embed-text")
+_OLLAMA_TIMEOUT_SECONDS = float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "30"))
 _RAG_TOP_K = int(os.getenv("RAG_TOP_K", "30"))
 
 
 @lru_cache(maxsize=1)
-def _get_client() -> openai.OpenAI:
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        raise RuntimeError(
-            "Busca semântica indisponível: defina OPENAI_API_KEY para usar o modo RAG na interface."
-        )
-
-    base_url = os.getenv("OPENAI_BASE_URL") or None
-    return openai.OpenAI(api_key=api_key, base_url=base_url)
-
-
-@lru_cache(maxsize=2048)
-def _embed(text: str) -> tuple[float, ...]:
+def _ollama_embed(text: str) -> tuple[float, ...]:
     normalized = " ".join((text or "").split())
     if not normalized:
         return tuple()
 
-    response = _get_client().embeddings.create(
-        model=_RAG_EMBEDDING_MODEL,
-        input=normalized,
+    response = requests.post(
+        f"{_OLLAMA_BASE_URL}/api/embeddings",
+        json={
+            "model": _OLLAMA_EMBEDDING_MODEL,
+            "prompt": normalized,
+        },
+        timeout=_OLLAMA_TIMEOUT_SECONDS,
     )
-    return tuple(response.data[0].embedding)
+    response.raise_for_status()
+
+    payload = response.json()
+    embedding = payload.get("embedding")
+    if not embedding:
+        raise RuntimeError(
+            f"Resposta do Ollama sem embedding para o modelo {_OLLAMA_EMBEDDING_MODEL}."
+        )
+
+    return tuple(float(value) for value in embedding)
+
+
+@lru_cache(maxsize=2048)
+def _embed(text: str) -> tuple[float, ...]:
+    return _ollama_embed(text)
 
 
 def _safe_embed(text: str) -> tuple[float, ...]:
     try:
         return _embed(text)
     except Exception as exc:  # pragma: no cover - fallback de runtime
-        logger.warning("RAG: falha ao gerar embedding, usando fallback lexical: %s", exc)
+        logger.warning("RAG: falha ao gerar embedding com Ollama, usando fallback lexical: %s", exc)
         return tuple()
 
 
@@ -116,7 +125,7 @@ def _lexical_score(theme: str, document_text: str) -> float:
 
 
 def rank_project_groups(groups: dict[str, list[dict]], theme: str) -> dict[str, list[dict]]:
-    """Ordena e filtra os projetos de forma semântica usando embeddings.
+    """Ordena e filtra os projetos de forma semântica usando embeddings do Ollama.
 
     Se não houver tema, devolve os grupos inalterados.
     """

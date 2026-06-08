@@ -29,8 +29,36 @@ DB_PASSWORD=SUA_SENHA_SUPABASE
 OPENAI_BASE_URL=https://generativelanguage.googleapis.com
 OPENAI_API_KEY=SUA_CHAVE_GEMINI
 OPENAI_MODEL=gemini-flash-latest
+OLLAMA_BASE_URL=http://127.0.0.1:11434
+OLLAMA_EMBEDDING_MODEL=nomic-embed-text
 FLASK_DEBUG=false
 ```
+
+## RAG zero custo com Ollama
+
+O recurso de busca por tema usa embeddings do Ollama quando o serviço local está disponível.
+Se o Ollama não estiver rodando, o sistema faz fallback lexical automaticamente.
+
+### Preparação local
+
+1. Instale o Ollama: https://ollama.com/
+2. Inicie o serviço local.
+3. Baixe um modelo de embedding, por exemplo:
+
+```bash
+ollama pull nomic-embed-text
+```
+
+4. Garanta que estas variáveis estejam presentes no `.env`/`.env.local`:
+
+```env
+OLLAMA_BASE_URL=http://127.0.0.1:11434
+OLLAMA_EMBEDDING_MODEL=nomic-embed-text
+```
+
+### Observação para Render
+
+O Render não hospeda o Ollama local neste projeto. No deploy, a busca por tema continua funcionando com fallback lexical caso o Ollama não esteja acessível.
 
 ## Variáveis recomendadas
 
