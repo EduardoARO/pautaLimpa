@@ -16,7 +16,8 @@ load_dotenv()
 app = Flask(__name__)
 logger = get_logger(__name__)
 
-_NEXT_FRONTEND_URL = os.getenv("NEXT_FRONTEND_URL", "http://127.0.0.1:3000")
+_NEXT_FRONTEND_URL = os.getenv("NEXT_FRONTEND_URL", "http://127.0.0.1:3000").rstrip("/")
+_ANALYSIS_PREVIEW_LIMIT = 700
 
 _ANALYSIS_ORDER = ("IMPARCIAL", "DIREITA", "ESQUERDA")
 _ANALYSIS_PLACEHOLDER = {
@@ -32,14 +33,11 @@ _POSTS_QUERY = text("""
     WITH base AS (
         SELECT
             pb.id,
-            pb.id_origem,
             pb.sigla_tipo,
             pb.numero,
             pb.ano,
             pb.ementa_bruta,
-            pb.status_processamento,
             pb.data_apresentacao,
-            pb.data_captura,
             pb.link_oficial,
             pb.url_inteiro_teor
         FROM projetos_brutos pb
@@ -49,23 +47,16 @@ _POSTS_QUERY = text("""
     )
     SELECT
         base.id,
-        base.id_origem,
         base.sigla_tipo,
         base.numero,
         base.ano,
         base.ementa_bruta,
-        base.status_processamento,
         base.data_apresentacao,
-        base.data_captura,
         base.link_oficial,
         base.url_inteiro_teor,
         COALESCE(ai.tipo_analise::text, 'IMPARCIAL') AS tipo_analise,
-        COALESCE(ai.texto_traduzido, pia.texto_traduzido) AS texto_traduzido,
-        COALESCE(ai.status_ia::text, pia.status_ia::text, 'PENDENTE') AS status_ia,
-        COALESCE(ai.modelo_llm, pia.modelo_llm) AS modelo_llm,
-        COALESCE(ai.prompt_tokens, pia.prompt_tokens) AS prompt_tokens,
-        COALESCE(ai.completion_tokens, pia.completion_tokens) AS completion_tokens,
-        COALESCE(ai.data_processamento, pia.data_processamento) AS data_processamento
+        LEFT(COALESCE(ai.texto_traduzido, pia.texto_traduzido, ''), :preview_limit) AS texto_preview,
+        COALESCE(LENGTH(COALESCE(ai.texto_traduzido, pia.texto_traduzido, '')) > :preview_limit, FALSE) AS has_more
     FROM base
     LEFT JOIN analises_ia ai ON ai.fk_projeto = base.id
     LEFT JOIN processamento_ia pia
@@ -79,6 +70,22 @@ _STATS_QUERY = text("""
     FROM projetos_brutos
     GROUP BY status_processamento
     ORDER BY status_processamento
+""")
+
+_ANALYSIS_TEXT_QUERY = text("""
+    SELECT
+        COALESCE(ai.texto_traduzido, pia.texto_traduzido) AS texto_traduzido,
+        COALESCE(ai.tipo_analise::text, 'IMPARCIAL') AS tipo_analise
+    FROM projetos_brutos pb
+    LEFT JOIN analises_ia ai
+        ON ai.fk_projeto = pb.id
+       AND ai.tipo_analise::text = :tipo_analise
+    LEFT JOIN processamento_ia pia
+        ON pia.fk_projeto = pb.id
+       AND ai.id IS NULL
+    WHERE pb.id = :project_id
+      AND COALESCE(ai.tipo_analise::text, 'IMPARCIAL') = :tipo_analise
+    LIMIT 1
 """)
 
 
@@ -108,43 +115,37 @@ def _build_view_model(rows):
         if key not in projects:
             projects[key] = {
                 "id": row.id,
-                "id_origem": row.id_origem,
                 "title": f"{row.sigla_tipo} {row.numero}/{row.ano}",
                 "ementa": row.ementa_bruta,
-                "status_processamento": row.status_processamento,
                 "data_apresentacao": _format_date(row.data_apresentacao),
                 "group_label": date_label,
-                "data_captura": _format_datetime(row.data_captura),
                 "link_oficial": row.link_oficial,
                 "url_inteiro_teor": row.url_inteiro_teor,
-                "analyses": {},
             }
 
-        analysis_text = row.texto_traduzido or "Ainda sem texto gerado pela IA."
-        total_tokens = (row.prompt_tokens or 0) + (row.completion_tokens or 0)
-        projects[key]["analyses"][row.tipo_analise] = {
-            "tipo_analise": row.tipo_analise,
-            "texto": analysis_text,
-            "status_ia": row.status_ia or "PENDENTE",
-            "modelo_llm": row.modelo_llm or "—",
-            "tokens": total_tokens,
-            "data_processamento": _format_datetime(row.data_processamento),
-            "caption_chars": len(analysis_text),
-        }
+        preview_text = row.texto_preview or _ANALYSIS_PLACEHOLDER["texto"]
+        has_more = bool(row.has_more)
+        projects[key].setdefault("analysis_order", [])
+        projects[key]["analysis_order"].append(
+            {
+                "key": row.tipo_analise,
+                "texto": preview_text,
+                "has_more": has_more,
+            }
+        )
 
     for item in projects.values():
-        analyses = item["analyses"]
-        for analysis_key in _ANALYSIS_ORDER:
-            analyses.setdefault(analysis_key, {"tipo_analise": analysis_key, **_ANALYSIS_PLACEHOLDER})
-
-        item["caption"] = analyses["IMPARCIAL"]["texto"]
+        analyses = {entry["key"]: entry for entry in item.get("analysis_order", [])}
         item["analysis_order"] = [
-            {"key": key, **value}
-            for key, value in (
-                ("ESQUERDA", analyses["ESQUERDA"]),
-                ("IMPARCIAL", analyses["IMPARCIAL"]),
-                ("DIREITA", analyses["DIREITA"]),
+            analyses.get(
+                analysis_key,
+                {
+                    "key": analysis_key,
+                    "texto": _ANALYSIS_PLACEHOLDER["texto"],
+                    "has_more": False,
+                },
             )
+            for analysis_key in _ANALYSIS_ORDER
         ]
         grouped[item["group_label"]].append(item)
     return dict(grouped)
@@ -158,6 +159,7 @@ def _build_dashboard_payload(date_from: str, date_to: str, theme: str) -> tuple[
                 "date_from": date_from,
                 "date_to": date_to,
                 "theme": theme,
+                "preview_limit": _ANALYSIS_PREVIEW_LIMIT,
             },
         ).fetchall()
         stats_rows = session.execute(_STATS_QUERY).fetchall()
@@ -179,6 +181,16 @@ def _build_dashboard_payload(date_from: str, date_to: str, theme: str) -> tuple[
         "theme": theme,
         "total_visible": total_visible,
     }, total_visible
+
+
+@app.after_request
+def add_cors_headers(response):
+    if request.path.startswith("/api/"):
+        response.headers["Access-Control-Allow-Origin"] = _NEXT_FRONTEND_URL
+        response.headers["Vary"] = "Origin"
+        response.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+    return response
 
 
 @app.route("/")
@@ -205,6 +217,51 @@ def api_dashboard():
         ), 500
 
     return jsonify(payload)
+
+
+@app.route("/api/analysis-text")
+def api_analysis_text():
+    project_id = request.args.get("project_id", type=int)
+    tipo_analise = (request.args.get("tipo_analise") or "").strip().upper()
+
+    if project_id is None:
+        return jsonify({"error": "project_id_required", "message": "project_id é obrigatório."}), 400
+
+    if tipo_analise not in _ANALYSIS_ORDER:
+        return (
+            jsonify(
+                {
+                    "error": "invalid_tipo_analise",
+                    "message": "tipo_analise deve ser IMPARCIAL, DIREITA ou ESQUERDA.",
+                }
+            ),
+            400,
+        )
+
+    with get_session() as session:
+        row = session.execute(
+            _ANALYSIS_TEXT_QUERY,
+            {"project_id": project_id, "tipo_analise": tipo_analise},
+        ).mappings().first()
+
+    if not row or not row.get("texto_traduzido"):
+        return (
+            jsonify(
+                {
+                    "error": "analysis_not_found",
+                    "message": "Não foi possível localizar o texto completo da análise solicitada.",
+                }
+            ),
+            404,
+        )
+
+    return jsonify(
+        {
+            "project_id": project_id,
+            "tipo_analise": row["tipo_analise"],
+            "texto": row["texto_traduzido"],
+        }
+    )
 
 
 @app.route("/api/health")

@@ -8,13 +8,16 @@ import useEmblaCarousel from 'embla-carousel-react';
 type Analysis = {
   key: string;
   texto: string;
+  has_more?: boolean;
 };
 
 type Props = {
+  apiBaseUrl: string;
+  projectId: number;
   analyses: Analysis[];
 };
 
-export default function AnalysisCarousel({ analyses }: Props) {
+export default function AnalysisCarousel({ apiBaseUrl, projectId, analyses }: Props) {
   const orderedAnalyses = useMemo(() => {
     const priority: Record<string, number> = {
       ESQUERDA: 0,
@@ -36,8 +39,12 @@ export default function AnalysisCarousel({ analyses }: Props) {
 
   const slideBodyRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const closeTimerRef = useRef<number | null>(null);
+  const requestIdRef = useRef(0);
   const [overflowMap, setOverflowMap] = useState<Record<string, boolean>>({});
   const [activeAnalysis, setActiveAnalysis] = useState<Analysis | null>(null);
+  const [modalText, setModalText] = useState('');
+  const [isLoadingFullText, setIsLoadingFullText] = useState(false);
+  const [modalError, setModalError] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
 
   const [emblaRef, emblaApi] = useEmblaCarousel({
@@ -135,13 +142,51 @@ export default function AnalysisCarousel({ analyses }: Props) {
     }
 
     setActiveAnalysis(analysis);
+    setModalText(analysis.texto);
+    setModalError('');
+    setIsLoadingFullText(Boolean(analysis.has_more));
     requestAnimationFrame(() => setIsModalOpen(true));
+
+    if (!analysis.has_more || !apiBaseUrl) {
+      setIsLoadingFullText(false);
+      return;
+    }
+
+    const currentRequestId = requestIdRef.current + 1;
+    requestIdRef.current = currentRequestId;
+
+    fetch(
+      `${apiBaseUrl}/api/analysis-text?project_id=${encodeURIComponent(projectId)}&tipo_analise=${encodeURIComponent(
+        analysis.key,
+      )}`,
+      { cache: 'no-store' },
+    )
+      .then(async (response) => {
+        const payload = await response.json();
+        if (!response.ok) {
+          throw new Error(payload?.message || 'Não foi possível carregar o texto completo.');
+        }
+        return payload.texto as string;
+      })
+      .then((textoCompleto) => {
+        if (requestIdRef.current !== currentRequestId) return;
+        setModalText(textoCompleto);
+        setIsLoadingFullText(false);
+      })
+      .catch((error: Error) => {
+        if (requestIdRef.current !== currentRequestId) return;
+        setModalError(error.message || 'Falha ao carregar o texto completo.');
+        setIsLoadingFullText(false);
+      });
   };
 
   const handleCloseModal = () => {
     setIsModalOpen(false);
     closeTimerRef.current = window.setTimeout(() => {
       setActiveAnalysis(null);
+      setModalText('');
+      setModalError('');
+      setIsLoadingFullText(false);
     }, 220);
   };
 
@@ -208,7 +253,9 @@ export default function AnalysisCarousel({ analyses }: Props) {
             </div>
 
             <div className="analysis-modal__body">
-              <pre>{activeAnalysis.texto}</pre>
+              {isLoadingFullText ? <p className="analysis-modal__status">Carregando texto completo…</p> : null}
+              {modalError ? <p className="analysis-modal__status analysis-modal__status--error">{modalError}</p> : null}
+              <pre>{modalText}</pre>
             </div>
           </div>
         </div>

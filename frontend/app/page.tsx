@@ -2,13 +2,12 @@
 
 import AnalysisCarousel from '../components/analysis-carousel';
 
-const BACKEND_URL =
-  (typeof globalThis !== 'undefined' && globalThis.process?.env?.BACKEND_URL) ||
-  'http://127.0.0.1:5000';
+const BACKEND_URL = (process.env.BACKEND_URL || process.env.NEXT_PUBLIC_BACKEND_URL || '').replace(/\/$/, '');
 
 type Analysis = {
   key: string;
   texto: string;
+  has_more?: boolean;
 };
 
 type DashboardItem = {
@@ -18,7 +17,6 @@ type DashboardItem = {
   data_apresentacao: string;
   link_oficial?: string | null;
   url_inteiro_teor?: string | null;
-  analyses: Record<string, { texto: string }>;
   analysis_order: Analysis[];
 };
 
@@ -73,6 +71,10 @@ function sortGroupsByDayProximity(groups: Record<string, DashboardItem[]>) {
 }
 
 async function fetchDashboard(searchParams: Record<string, string | string[] | undefined>) {
+  if (!BACKEND_URL) {
+    throw new Error('BACKEND_URL não configurada no serviço do frontend.');
+  }
+
   const params = new URLSearchParams();
   const dateFrom = typeof searchParams.date_from === 'string' ? searchParams.date_from : '';
   const dateTo = typeof searchParams.date_to === 'string' ? searchParams.date_to : '';
@@ -86,11 +88,15 @@ async function fetchDashboard(searchParams: Record<string, string | string[] | u
     cache: 'no-store',
   });
 
+  const responseText = await response.text();
+
   if (!response.ok) {
-    throw new Error('Falha ao carregar o dashboard');
+    throw new Error(
+      `Falha ao carregar o dashboard (${response.status} ${response.statusText}) via ${BACKEND_URL}/api/dashboard. Resposta: ${responseText.slice(0, 500)}`,
+    );
   }
 
-  return (await response.json()) as DashboardResponse;
+  return JSON.parse(responseText) as DashboardResponse;
 }
 
 export default async function Page({ searchParams }: { searchParams: Record<string, string | string[] | undefined> }) {
@@ -102,7 +108,7 @@ export default async function Page({ searchParams }: { searchParams: Record<stri
       <header className="hero">
         <div className="brand">
           <div className="logo-slot">
-            <span>PL</span>
+            <img src="/logo.png" alt="PautaLimpa" width="64" height="64" />
           </div>
           <div>
             <p className="eyebrow">PautaLimpa</p>
@@ -164,7 +170,7 @@ export default async function Page({ searchParams }: { searchParams: Record<stri
                         </p>
                       </div>
 
-                      <AnalysisCarousel analyses={item.analysis_order} />
+                      <AnalysisCarousel apiBaseUrl={BACKEND_URL} projectId={item.id} analyses={item.analysis_order} />
                     </section>
                   </div>
 
