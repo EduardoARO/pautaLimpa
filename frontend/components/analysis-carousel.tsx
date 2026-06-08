@@ -46,32 +46,52 @@ export default function AnalysisCarousel({ apiBaseUrl, projectId, analyses }: Pr
   const [isLoadingFullText, setIsLoadingFullText] = useState(false);
   const [modalError, setModalError] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isMobileViewport, setIsMobileViewport] = useState(false);
 
-  const [emblaRef, emblaApi] = useEmblaCarousel({
-    align: 'center',
-    axis: 'x',
-    containScroll: 'trimSnaps',
-    dragFree: false,
-    duration: 26,
-    loop: false,
-    skipSnaps: false,
-    startIndex,
-  });
-
-  useEffect(() => {
-    if (!emblaApi) return;
-    emblaApi.reInit({
-      align: 'center',
-      axis: 'x',
-      containScroll: 'trimSnaps',
+  const carouselOptions = useMemo(
+    () => ({
+      align: 'center' as const,
+      axis: 'x' as const,
+      containScroll: 'trimSnaps' as const,
       dragFree: false,
       duration: 26,
       loop: false,
       skipSnaps: false,
       startIndex,
-    });
+      breakpoints: {
+        '(max-width: 640px)': {
+          align: 'start' as const,
+          containScroll: 'trimSnaps' as const,
+          dragFree: false,
+          duration: 22,
+          skipSnaps: false,
+        },
+      },
+    }),
+    [startIndex],
+  );
+
+  const [emblaRef, emblaApi] = useEmblaCarousel(carouselOptions);
+
+  useEffect(() => {
+    if (!emblaApi) return;
+    emblaApi.reInit(carouselOptions);
     emblaApi.scrollTo(startIndex, true);
-  }, [emblaApi, startIndex]);
+  }, [carouselOptions, emblaApi, startIndex]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const mediaQuery = window.matchMedia('(max-width: 640px)');
+    const updateViewport = () => setIsMobileViewport(mediaQuery.matches);
+
+    updateViewport();
+    mediaQuery.addEventListener('change', updateViewport);
+
+    return () => {
+      mediaQuery.removeEventListener('change', updateViewport);
+    };
+  }, []);
 
   useEffect(() => {
     const measureOverflow = () => {
@@ -197,6 +217,7 @@ export default function AnalysisCarousel({ apiBaseUrl, projectId, analyses }: Pr
           <div className="analysis-carousel__container">
             {orderedAnalyses.map((analysis) => {
               const hasOverflow = Boolean(overflowMap[analysis.key]);
+              const shouldShowMoreButton = Boolean(analysis.has_more || hasOverflow || isMobileViewport);
 
               return (
                 <article
@@ -217,7 +238,7 @@ export default function AnalysisCarousel({ apiBaseUrl, projectId, analyses }: Pr
                     <pre>{analysis.texto}</pre>
                   </div>
 
-                  {hasOverflow ? (
+                  {shouldShowMoreButton || !isMobileViewport ? (
                     <button type="button" className="analysis-slide__more" onClick={() => handleOpenModal(analysis)}>
                       Mostrar mais
                     </button>

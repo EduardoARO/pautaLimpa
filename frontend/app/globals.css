@@ -313,20 +313,15 @@ textarea {
 .analysis-slide-body {
   position: relative;
   flex: 1;
+  max-height: 230px;
   overflow: hidden;
+  padding-right: 6px;
+  scrollbar-gutter: stable;
+  -webkit-overflow-scrolling: touch;
 }
 
 .analysis-slide-body::after {
-  content: '';
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: 64px;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0), rgba(255, 255, 255, 0.92));
-  pointer-events: none;
-  opacity: 0;
-  transition: opacity 180ms ease;
+  content: none;
 }
 
 .analysis-slide__more {
@@ -427,7 +422,7 @@ textarea {
 }
 
 .analysis-modal__body {
-  overflow: auto;
+  overflow: hidden;
   padding-right: 6px;
 }
 
@@ -530,6 +525,31 @@ code {
     grid-template-columns: 1fr;
   }
 
+  .columns {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding: 16px 16px 0;
+  }
+
+  .panel {
+    min-width: 0;
+    overflow: visible;
+    padding: 16px;
+    font-size: 15px;
+    line-height: 1.7;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+  }
+
+  .card-top {
+    padding: 16px 16px 0;
+  }
+
+  .card-footer {
+    padding: 16px;
+  }
+
   .toolbar,
   .card,
   .empty {
@@ -537,11 +557,52 @@ code {
   }
 
   .analysis-carousel {
-    padding-inline: 12px;
+    padding-inline: 10px;
+  }
+
+  .analysis-carousel__container {
+    gap: 12px;
   }
 
   .analysis-slide {
-    flex-basis: 90%;
+    flex-basis: 100%;
+    padding: 16px;
+    border-radius: 18px;
+  }
+
+  .analysis-slide-head {
+    margin-bottom: 8px;
+  }
+
+  .analysis-slide-head h4 {
+    font-size: 16px;
+  }
+
+  .analysis-slide pre {
+    font-size: 14px;
+    line-height: 1.7;
+  }
+
+  .analysis-slide-body {
+    max-height: 230px;
+    overflow: hidden;
+    padding-right: 0;
+  }
+
+  .analysis-slide__more {
+    width: 100%;
+    text-align: center;
+    margin-top: 12px;
+    padding: 9px 12px;
+  }
+
+  .carousel-intro {
+    gap: 4px;
+    margin-bottom: 12px;
+  }
+
+  .carousel-hint {
+    font-size: 12px;
   }
 
   .analysis-modal__head {
