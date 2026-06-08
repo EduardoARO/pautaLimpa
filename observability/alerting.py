@@ -198,10 +198,24 @@ class Alerter:
     def _get_monthly_token_usage(self) -> int:
         """Soma tokens usados no mês corrente via banco de dados."""
         sql = text("""
-            SELECT COALESCE(SUM(prompt_tokens + completion_tokens), 0)
-            FROM processamento_ia
-            WHERE data_processamento >= DATE_TRUNC('month', NOW())
-              AND status_ia IN ('SUCESSO', 'FALLBACK_UTILIZADO')
+            SELECT CASE
+                WHEN EXISTS (
+                    SELECT 1
+                    FROM analises_ia
+                    WHERE data_processamento >= DATE_TRUNC('month', NOW())
+                ) THEN COALESCE((
+                    SELECT SUM(COALESCE(prompt_tokens, 0) + COALESCE(completion_tokens, 0))
+                    FROM analises_ia
+                    WHERE data_processamento >= DATE_TRUNC('month', NOW())
+                      AND status_ia IN ('SUCESSO', 'FALLBACK_UTILIZADO')
+                ), 0)
+                ELSE COALESCE((
+                    SELECT SUM(COALESCE(prompt_tokens, 0) + COALESCE(completion_tokens, 0))
+                    FROM processamento_ia
+                    WHERE data_processamento >= DATE_TRUNC('month', NOW())
+                      AND status_ia IN ('SUCESSO', 'FALLBACK_UTILIZADO')
+                ), 0)
+            END
         """)
         with get_session() as session:
             result = session.execute(sql)

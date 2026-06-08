@@ -4,16 +4,15 @@ from datetime import datetime
 
 from dotenv import load_dotenv
 
-from ingestion.extractor import LegislativeExtractor
-from processing.llm_client import LLMProcessor
+from pipeline.hourly_cycle import run_ingest_and_process_once
 from utils.logger import get_logger
 
 load_dotenv()
 
 logger = get_logger(__name__)
 
-_INTERVAL_SECONDS = int(os.getenv("AUTO_PIPELINE_INTERVAL_SECONDS", "900"))
-_LLM_BATCH_SIZE = int(os.getenv("LLM_BATCH_SIZE", "1"))
+_INGEST_INTERVAL_MINUTES = int(os.getenv("INGEST_INTERVAL_MINUTES", "60"))
+_INTERVAL_SECONDS = int(os.getenv("AUTO_PIPELINE_INTERVAL_SECONDS", str(_INGEST_INTERVAL_MINUTES * 60)))
 _RUN_ON_START = os.getenv("AUTO_PIPELINE_RUN_ON_START", "true").lower() == "true"
 _PROCESS_UNTIL_EMPTY = os.getenv("AUTO_PROCESS_UNTIL_EMPTY", "false").lower() == "true"
 _RUN_TIMES = [
@@ -24,20 +23,14 @@ _RUN_TIMES = [
 
 
 def run_once() -> None:
-    logger.info("AUTO: iniciando extração segura (sem publicação)...")
-    extraction_stats = LegislativeExtractor().run()
-    logger.info("AUTO: extração finalizada | %s", extraction_stats)
-
-    logger.info("AUTO: iniciando processamento IA (batch_size=%d)...", _LLM_BATCH_SIZE)
-    while True:
-        llm_stats = LLMProcessor().run(batch_size=_LLM_BATCH_SIZE)
-        logger.info("AUTO: processamento IA finalizado | %s", llm_stats)
-        if not _PROCESS_UNTIL_EMPTY or llm_stats.get("processados", 0) == 0:
-            break
+    logger.info("AUTO: iniciando ciclo horário compartilhado...")
+    stats = run_ingest_and_process_once(process_until_empty=_PROCESS_UNTIL_EMPTY)
+    logger.info("AUTO: ciclo horário finalizado | %s", stats)
 
 
 def main() -> None:
-    logger.info("AUTO: watcher iniciado | horários=%s | batch_ia=%d", _RUN_TIMES, _LLM_BATCH_SIZE)
+    logger.info("AUTO: watcher iniciado | horários=%s | process_until_empty=%s", _RUN_TIMES, _PROCESS_UNTIL_EMPTY)
+    logger.info("AUTO: intervalo base=%d minuto(s) | override_segundos=%d", _INGEST_INTERVAL_MINUTES, _INTERVAL_SECONDS)
     first_run = True
     last_run_key = None
     while True:

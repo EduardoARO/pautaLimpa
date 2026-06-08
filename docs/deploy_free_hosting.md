@@ -35,7 +35,6 @@ FLASK_DEBUG=false
 ## Variáveis recomendadas
 
 ```env
-UI_POSTS_LIMIT=500
 MAX_PAGES_PER_RUN=20
 API_PAGE_SIZE=100
 API_PAGE_DELAY_SECONDS=0.5
@@ -73,6 +72,12 @@ gunicorn wsgi:application
 ## Como rodar extração/IA em hospedagem gratuita
 
 A UI web deve ficar como serviço web.
+
+Para desenvolvimento local, use o launcher único:
+
+```bash
+py -3 run_local.py
+```
 
 Para executar carga de dados, use uma destas opções:
 

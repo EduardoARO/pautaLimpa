@@ -117,6 +117,60 @@ _FETCH_QUEUE_SQL = text("""
     LIMIT :limit
 """)
 
+_ANALYSIS_TYPES = ("IMPARCIAL", "DIREITA", "ESQUERDA")
+
+_UPSERT_ANALISE_SQL = text("""
+    INSERT INTO analises_ia (
+        fk_projeto, tipo_analise, fk_versao_prompt, texto_limpo,
+        texto_traduzido, status_ia,
+        prompt_tokens, completion_tokens,
+        modelo_llm, processado_parcialmente
+    ) VALUES (
+        :fk_projeto, :tipo_analise, :fk_versao_prompt, :texto_limpo,
+        :texto_traduzido, :status_ia,
+        :prompt_tokens, :completion_tokens,
+        :modelo_llm, :processado_parcialmente
+    )
+    ON CONFLICT ON CONSTRAINT uq_analises_projeto_tipo
+    DO UPDATE SET
+        fk_versao_prompt        = EXCLUDED.fk_versao_prompt,
+        texto_limpo             = EXCLUDED.texto_limpo,
+        texto_traduzido         = EXCLUDED.texto_traduzido,
+        status_ia               = EXCLUDED.status_ia,
+        prompt_tokens           = EXCLUDED.prompt_tokens,
+        completion_tokens       = EXCLUDED.completion_tokens,
+        modelo_llm              = EXCLUDED.modelo_llm,
+        processado_parcialmente  = EXCLUDED.processado_parcialmente,
+        data_processamento      = NOW(),
+        data_atualizacao        = NOW()
+""")
+
+_UPSERT_LEGACY_IA_SQL = text("""
+    INSERT INTO processamento_ia (
+        fk_projeto, fk_versao_prompt, texto_limpo,
+        texto_traduzido, status_ia,
+        prompt_tokens, completion_tokens,
+        modelo_llm, processado_parcialmente
+    ) VALUES (
+        :fk_projeto, :fk_versao_prompt, :texto_limpo,
+        :texto_traduzido, :status_ia,
+        :prompt_tokens, :completion_tokens,
+        :modelo_llm, :processado_parcialmente
+    )
+    ON CONFLICT ON CONSTRAINT uq_processamento_projeto
+    DO UPDATE SET
+        fk_versao_prompt        = EXCLUDED.fk_versao_prompt,
+        texto_limpo             = EXCLUDED.texto_limpo,
+        texto_traduzido         = EXCLUDED.texto_traduzido,
+        status_ia               = EXCLUDED.status_ia,
+        prompt_tokens           = EXCLUDED.prompt_tokens,
+        completion_tokens       = EXCLUDED.completion_tokens,
+        modelo_llm              = EXCLUDED.modelo_llm,
+        processado_parcialmente = EXCLUDED.processado_parcialmente,
+        data_processamento      = NOW(),
+        data_atualizacao        = NOW()
+""")
+
 
 class OpenAIProvider:
     """Provedor primário: OpenAI GPT-4o ou qualquer provedor OpenAI-compatível (Kimi, Groq, etc.)."""
@@ -328,6 +382,220 @@ class LLMProcessor:
         """Decide se a falha deve manter o item na fila para nova tentativa futura."""
         return reason in _DEFERRED_PROVIDER_FAILURES
 
+    def _save_result(
+        self,
+        fk_projeto: int,
+        fk_versao_prompt: int,
+        texto_limpo: str,
+        tipo_analise: str,
+        resultado: dict | None,
+        status_ia: str,
+        processado_parcialmente: bool,
+    ) -> None:
+        """Persiste resultado em analises_ia e, para IMPARCIAL, mantém compatibilidade com processamento_ia."""
+        payload = {
+            "fk_projeto": fk_projeto,
+            "tipo_analise": tipo_analise,
+            "fk_versao_prompt": fk_versao_prompt,
+            "texto_limpo": texto_limpo,
+            "texto_traduzido": resultado.get("text") if resultado else None,
+            "status_ia": status_ia,
+            "prompt_tokens": resultado.get("prompt_tokens") if resultado else None,
+            "completion_tokens": resultado.get("completion_tokens") if resultado else None,
+            "modelo_llm": resultado.get("model") if resultado else None,
+            "processado_parcialmente": processado_parcialmente,
+        }
+
+        with get_session() as session:
+            try:
+                session.execute(_UPSERT_ANALISE_SQL, payload)
+                if tipo_analise == "IMPARCIAL":
+                    session.execute(
+                        _UPSERT_LEGACY_IA_SQL,
+                        {
+                            key: payload[key]
+                            for key in (
+                                "fk_projeto",
+                                "fk_versao_prompt",
+                                "texto_limpo",
+                                "texto_traduzido",
+                                "status_ia",
+                                "prompt_tokens",
+                                "completion_tokens",
+                                "modelo_llm",
+                                "processado_parcialmente",
+                            )
+                        },
+                    )
+                session.commit()
+            except SQLAlchemyError as exc:
+                session.rollback()
+                logger.error(
+                    "Erro ao salvar resultado IA para fk_projeto=%d tipo=%s: %s",
+                    fk_projeto,
+                    tipo_analise,
+                    exc,
+                )
+                raise
+
+    def _update_project_status(self, fk_projeto: int, status: str) -> None:
+        with get_session() as session:
+            try:
+                session.execute(
+                    _UPDATE_PROJETO_STATUS_SQL,
+                    {"status": status, "id": fk_projeto},
+                )
+                session.commit()
+            except SQLAlchemyError as exc:
+                session.rollback()
+                logger.error("Erro ao atualizar status do projeto id=%d: %s", fk_projeto, exc)
+                raise
+
+    def _process_single_analysis(
+        self,
+        projeto_row: dict,
+        tipo_analise: str,
+        texto_para_llm: str,
+        processado_parcialmente: bool,
+    ) -> tuple[str, dict | None]:
+        """Executa uma análise específica e persiste seu resultado."""
+        fk_projeto = projeto_row["id"]
+        projeto_row["texto_limpo"] = texto_para_llm
+        messages, fk_versao_prompt = self._prompt_manager.build_messages(projeto_row, tipo_analise=tipo_analise)
+
+        resultado, primary_failure = self._call_with_retry(self._primary, messages)
+        is_fallback = False
+
+        if resultado is None:
+            logger.warning(
+                "Provedor primário esgotado para id=%d tipo=%s — acionando fallback.",
+                fk_projeto,
+                tipo_analise,
+            )
+            if self._fallback is None:
+                try:
+                    self._fallback = AnthropicProvider()
+                except (ImportError, ValueError) as exc:
+                    logger.error("Fallback indisponivel: %s", exc)
+                    return "ADIADO_SEM_PROVEDOR", None
+
+            resultado, fallback_failure = self._call_with_retry(self._fallback, messages)
+            is_fallback = True
+        else:
+            fallback_failure = None
+
+        if resultado is None:
+            if self._should_defer_processing(primary_failure) or self._should_defer_processing(fallback_failure):
+                logger.warning(
+                    "Provedores indisponiveis para id=%d tipo=%s; item mantido em AGUARDANDO_IA.",
+                    fk_projeto,
+                    tipo_analise,
+                )
+                return "ADIADO_SEM_PROVEDOR", None
+
+            logger.error("Todos os provedores falharam para id=%d tipo=%s.", fk_projeto, tipo_analise)
+            self._save_result(
+                fk_projeto,
+                fk_versao_prompt,
+                texto_para_llm,
+                tipo_analise,
+                None,
+                "ERRO_LLM",
+                processado_parcialmente,
+            )
+            return "ERRO_LLM", None
+
+        if self._is_refusal(resultado["text"]):
+            logger.warning("Recusa detectada na resposta da LLM para id=%d tipo=%s.", fk_projeto, tipo_analise)
+            self._save_result(
+                fk_projeto,
+                fk_versao_prompt,
+                texto_para_llm,
+                tipo_analise,
+                resultado,
+                "RECUSA_MODELO",
+                processado_parcialmente,
+            )
+            return "RECUSA_MODELO", resultado
+
+        texto_final = self._truncate_to_instagram_limit(resultado["text"] or "")
+        if texto_final != (resultado["text"] or ""):
+            resultado["text"] = texto_final
+            logger.warning(
+                "Resposta da LLM truncada para %d chars (limite Instagram) | id=%d tipo=%s.",
+                _MAX_RESPONSE_CHARS,
+                fk_projeto,
+                tipo_analise,
+            )
+
+        invalid_reason = self._validate_generated_text(texto_final)
+        if invalid_reason:
+            logger.warning(
+                "Saida inicial invalida para id=%d tipo=%s (%s). Solicitando reescrita ao modelo.",
+                fk_projeto,
+                tipo_analise,
+                invalid_reason,
+            )
+            provider_used = self._fallback if is_fallback else self._primary
+            correction_messages = self._build_correction_messages(
+                messages, texto_final, invalid_reason, projeto_row,
+            )
+            corrected_result, _ = self._call_with_retry(provider_used, correction_messages)
+
+            if corrected_result is not None and not self._is_refusal(corrected_result["text"]):
+                corrected_text = self._truncate_to_instagram_limit(corrected_result["text"] or "")
+                if corrected_text != (corrected_result["text"] or ""):
+                    logger.warning(
+                        "Resposta corrigida da LLM truncada para %d chars | id=%d tipo=%s.",
+                        _MAX_RESPONSE_CHARS,
+                        fk_projeto,
+                        tipo_analise,
+                    )
+                corrected_result["text"] = corrected_text
+                corrected_invalid_reason = self._validate_generated_text(corrected_text)
+                if corrected_invalid_reason is None:
+                    resultado = corrected_result
+                    texto_final = corrected_text
+                    logger.info("Saida corrigida com sucesso para id=%d tipo=%s.", fk_projeto, tipo_analise)
+                else:
+                    resultado = corrected_result
+                    texto_final = corrected_text
+                    logger.warning(
+                        "Saida corrigida ainda invalida para id=%d tipo=%s (%s).",
+                        fk_projeto,
+                        tipo_analise,
+                        corrected_invalid_reason,
+                    )
+            else:
+                logger.warning(
+                    "Nao foi possivel autocorrigir a saida para id=%d tipo=%s.",
+                    fk_projeto,
+                    tipo_analise,
+                )
+
+        resultado["text"] = texto_final
+        status_ia = "FALLBACK_UTILIZADO" if is_fallback else "SUCESSO"
+        self._save_result(
+            fk_projeto,
+            fk_versao_prompt,
+            texto_para_llm,
+            tipo_analise,
+            resultado,
+            status_ia,
+            processado_parcialmente,
+        )
+
+        total_tokens = (resultado.get("prompt_tokens") or 0) + (resultado.get("completion_tokens") or 0)
+        logger.info(
+            "LLM OK | id=%d | tipo=%s | modelo=%s | tokens=%d | status=%s",
+            fk_projeto,
+            tipo_analise,
+            resultado.get("model"),
+            total_tokens,
+            status_ia,
+        )
+        return status_ia, resultado
+
     def _call_with_retry(self, provider, messages: list[dict]) -> tuple[dict | None, str | None]:
         """
         Chama um provedor com retry automático para 429 e 5xx.
@@ -375,41 +643,6 @@ class LLMProcessor:
                     logger.error("Erro inesperado no provedor %s: %s", provider.__class__.__name__, exc)
                     return None, "UNEXPECTED_ERROR"
         return None, failure_reason or "RETRY_EXHAUSTED"
-
-    def _save_result(
-        self,
-        fk_projeto:              int,
-        fk_versao_prompt:        int,
-        texto_limpo:             str,
-        resultado:               dict | None,
-        status_ia:               str,
-        processado_parcialmente: bool,
-        novo_status_projeto:     str,
-    ) -> None:
-        """Persiste resultado em processamento_ia e atualiza projetos_brutos."""
-        payload = {
-            "fk_projeto":              fk_projeto,
-            "fk_versao_prompt":        fk_versao_prompt,
-            "texto_limpo":             texto_limpo,
-            "texto_traduzido":         resultado.get("text")             if resultado else None,
-            "status_ia":               status_ia,
-            "prompt_tokens":           resultado.get("prompt_tokens")    if resultado else None,
-            "completion_tokens":       resultado.get("completion_tokens") if resultado else None,
-            "modelo_llm":              resultado.get("model")            if resultado else None,
-            "processado_parcialmente": processado_parcialmente,
-        }
-        with get_session() as session:
-            try:
-                session.execute(_UPSERT_IA_SQL, payload)
-                session.execute(
-                    _UPDATE_PROJETO_STATUS_SQL,
-                    {"status": novo_status_projeto, "id": fk_projeto},
-                )
-                session.commit()
-            except SQLAlchemyError as exc:
-                session.rollback()
-                logger.error("Erro ao salvar resultado IA para fk_projeto=%d: %s", fk_projeto, exc)
-                raise
 
     def _truncate_to_instagram_limit(self, text: str) -> str:
         """Garante o limite absoluto de caracteres aceito na legenda."""
@@ -483,123 +716,42 @@ class LLMProcessor:
             projeto_row.get("ementa_bruta", "")
         )
 
-        # Monta mensagens e obtém ID da versão do prompt
         projeto_row["texto_limpo"] = texto_para_llm
-        messages, fk_versao_prompt = self._prompt_manager.build_messages(projeto_row)
 
-        # Tentativa no provedor PRIMÁRIO
-        resultado, primary_failure = self._call_with_retry(self._primary, messages)
-        status_ia = "SUCESSO"
-        is_fallback = False
+        statuses: dict[str, str] = {}
 
-        if resultado is None:
-            logger.warning(
-                "Provedor primário esgotado para id=%d — acionando fallback.", fk_projeto
+        for tipo_analise in _ANALYSIS_TYPES:
+            status, resultado = self._process_single_analysis(
+                projeto_row,
+                tipo_analise,
+                texto_para_llm,
+                processado_parcialmente,
             )
-            if self._fallback is None:
-                try:
-                    self._fallback = AnthropicProvider()
-                except (ImportError, ValueError) as exc:
-                    logger.error("Fallback indisponivel: %s", exc)
-                    logger.warning(
-                        "Nenhum provedor disponivel para id=%d; item mantido em AGUARDANDO_IA.",
-                        fk_projeto,
-                    )
-                    return "ADIADO_SEM_PROVEDOR"
+            statuses[tipo_analise] = status
 
-            resultado, fallback_failure = self._call_with_retry(self._fallback, messages)
-            is_fallback = True
-        else:
-            fallback_failure = None
-
-        if resultado is None:
-            if (
-                self._should_defer_processing(primary_failure)
-                or self._should_defer_processing(fallback_failure)
-            ):
+            if status == "ADIADO_SEM_PROVEDOR":
                 logger.warning(
-                    "Provedores indisponiveis para id=%d; item mantido em AGUARDANDO_IA.",
+                    "Processamento adiado para id=%d tipo=%s; demais itens permanecem pendentes.",
                     fk_projeto,
+                    tipo_analise,
                 )
                 return "ADIADO_SEM_PROVEDOR"
 
-            logger.error("Todos os provedores falharam para id=%d.", fk_projeto)
-            self._save_result(
-                fk_projeto, fk_versao_prompt, texto_para_llm,
-                None, "ERRO_LLM", processado_parcialmente, "QUARENTENA",
-            )
-            return "ERRO_LLM"
+        if all(status in ("SUCESSO", "FALLBACK_UTILIZADO") for status in statuses.values()):
+            self._update_project_status(fk_projeto, "AGUARDANDO_MIDIA")
+            logger.info("Projeto id=%d liberado para AGUARDANDO_MIDIA após 3 análises.", fk_projeto)
+            return "FALLBACK_UTILIZADO" if any(status == "FALLBACK_UTILIZADO" for status in statuses.values()) else "SUCESSO"
 
-        # Detecta recusa do modelo
-        if self._is_refusal(resultado["text"]):
-            logger.warning("Recusa detectada na resposta da LLM para id=%d.", fk_projeto)
-            self._save_result(
-                fk_projeto, fk_versao_prompt, texto_para_llm,
-                resultado, "RECUSA_MODELO", processado_parcialmente, "QUARENTENA",
-            )
+        if any(status == "RECUSA_MODELO" for status in statuses.values()):
+            self._update_project_status(fk_projeto, "QUARENTENA")
             return "RECUSA_MODELO"
 
-        # Garante limite do Instagram e tenta uma autocorrecao se a saida vier fora das regras.
-        texto_final = self._truncate_to_instagram_limit(resultado["text"] or "")
-        if texto_final != (resultado["text"] or ""):
-            resultado["text"] = texto_final
-            logger.warning(
-                "Resposta da LLM truncada para %d chars (limite Instagram) | id=%d.",
-                _MAX_RESPONSE_CHARS, fk_projeto,
-            )
+        if any(status == "ERRO_LLM" for status in statuses.values()):
+            self._update_project_status(fk_projeto, "QUARENTENA")
+            return "ERRO_LLM"
 
-        invalid_reason = self._validate_generated_text(texto_final)
-        if invalid_reason:
-            logger.warning(
-                "Saida inicial invalida para id=%d (%s). Solicitando reescrita ao modelo.",
-                fk_projeto, invalid_reason,
-            )
-            provider_used = self._fallback if is_fallback else self._primary
-            correction_messages = self._build_correction_messages(
-                messages, texto_final, invalid_reason, projeto_row,
-            )
-            corrected_result, _ = self._call_with_retry(provider_used, correction_messages)
-
-            if corrected_result is not None and not self._is_refusal(corrected_result["text"]):
-                corrected_text = self._truncate_to_instagram_limit(corrected_result["text"] or "")
-                if corrected_text != (corrected_result["text"] or ""):
-                    logger.warning(
-                        "Resposta corrigida da LLM truncada para %d chars | id=%d.",
-                        _MAX_RESPONSE_CHARS, fk_projeto,
-                    )
-                corrected_result["text"] = corrected_text
-                corrected_invalid_reason = self._validate_generated_text(corrected_text)
-                if corrected_invalid_reason is None:
-                    resultado = corrected_result
-                    texto_final = corrected_text
-                    logger.info("Saida corrigida com sucesso para id=%d.", fk_projeto)
-                else:
-                    resultado = corrected_result
-                    texto_final = corrected_text
-                    logger.warning(
-                        "Saida corrigida ainda invalida para id=%d (%s). Quarentena validara o item.",
-                        fk_projeto, corrected_invalid_reason,
-                    )
-            else:
-                logger.warning(
-                    "Nao foi possivel autocorrigir a saida para id=%d; quarentena validara o item.",
-                    fk_projeto,
-                )
-
-        resultado["text"] = texto_final
-
-        status_ia = "FALLBACK_UTILIZADO" if is_fallback else "SUCESSO"
-        self._save_result(
-            fk_projeto, fk_versao_prompt, texto_para_llm,
-            resultado, status_ia, processado_parcialmente, "AGUARDANDO_MIDIA",
-        )
-
-        total_tokens = (resultado.get("prompt_tokens") or 0) + (resultado.get("completion_tokens") or 0)
-        logger.info(
-            "LLM OK | id=%d | modelo=%s | tokens=%d | status=%s",
-            fk_projeto, resultado.get("model"), total_tokens, status_ia,
-        )
-        return status_ia
+        self._update_project_status(fk_projeto, "AGUARDANDO_IA")
+        return "AGUARDANDO_IA"
 
     def run(self, batch_size: int = 10) -> dict[str, int]:
         """
@@ -639,6 +791,8 @@ class LLMProcessor:
                     "Lote interrompido por indisponibilidade de provedor; itens restantes permanecem em AGUARDANDO_IA."
                 )
                 break
+            elif status == "AGUARDANDO_IA":
+                stats["adiados"] += 1
 
         logger.info(
             "Processamento LLM concluído | processados=%d | sucesso=%d | quarentena=%d | erro=%d | adiados=%d",
