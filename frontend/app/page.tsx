@@ -70,6 +70,13 @@ function sortGroupsByDayProximity(groups: Record<string, DashboardItem[]>) {
   });
 }
 
+const FETCH_TIMEOUT_MS = Number(process.env.BACKEND_FETCH_TIMEOUT_MS || '60000');
+const FETCH_MAX_RETRIES = Number(process.env.BACKEND_FETCH_RETRIES || '4');
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function fetchDashboard(searchParams: Record<string, string | string[] | undefined>) {
   if (!BACKEND_URL) {
     throw new Error('BACKEND_URL não configurada no serviço do frontend.');
@@ -84,19 +91,45 @@ async function fetchDashboard(searchParams: Record<string, string | string[] | u
   if (dateTo) params.set('date_to', dateTo);
   if (theme) params.set('theme', theme);
 
-  const response = await fetch(`${BACKEND_URL}/api/dashboard?${params.toString()}`, {
-    cache: 'no-store',
-  });
+  const url = `${BACKEND_URL}/api/dashboard?${params.toString()}`;
+  let lastError: Error | null = null;
 
-  const responseText = await response.text();
+  for (let attempt = 1; attempt <= FETCH_MAX_RETRIES; attempt += 1) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
 
-  if (!response.ok) {
-    throw new Error(
-      `Falha ao carregar o dashboard (${response.status} ${response.statusText}) via ${BACKEND_URL}/api/dashboard. Resposta: ${responseText.slice(0, 500)}`,
-    );
+    try {
+      const response = await fetch(url, {
+        cache: 'no-store',
+        signal: controller.signal,
+      });
+
+      const responseText = await response.text();
+
+      if (response.ok) {
+        return JSON.parse(responseText) as DashboardResponse;
+      }
+
+      // 502/503/504 costumam ser cold start do backend free; vale a pena tentar de novo.
+      lastError = new Error(
+        `Falha ao carregar o dashboard (${response.status} ${response.statusText}) via ${url}. Resposta: ${responseText.slice(0, 500)}`,
+      );
+
+      if (![502, 503, 504].includes(response.status)) {
+        throw lastError;
+      }
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+    } finally {
+      clearTimeout(timeout);
+    }
+
+    if (attempt < FETCH_MAX_RETRIES) {
+      await sleep(Math.min(2000 * attempt, 8000));
+    }
   }
 
-  return JSON.parse(responseText) as DashboardResponse;
+  throw lastError ?? new Error('Falha desconhecida ao carregar o dashboard.');
 }
 
 export default async function Page({ searchParams }: { searchParams: Record<string, string | string[] | undefined> }) {
