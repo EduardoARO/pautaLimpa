@@ -9,4 +9,4 @@ services:
       - key: FLASK_DEBUG
         value: "false"
       - key: UI_POSTS_LIMIT
-        value: "500"
+        value: "100"

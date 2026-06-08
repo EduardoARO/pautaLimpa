@@ -18,6 +18,7 @@ logger = get_logger(__name__)
 
 _NEXT_FRONTEND_URL = os.getenv("NEXT_FRONTEND_URL", "http://127.0.0.1:3000").rstrip("/")
 _ANALYSIS_PREVIEW_LIMIT = 700
+_POSTS_LIMIT = max(1, int(os.getenv("UI_POSTS_LIMIT", "100")))
 
 _ANALYSIS_ORDER = ("IMPARCIAL", "DIREITA", "ESQUERDA")
 _ANALYSIS_PLACEHOLDER = {
@@ -44,6 +45,7 @@ _POSTS_QUERY = text("""
         WHERE (:date_from = '' OR pb.data_apresentacao >= CAST(:date_from AS DATE))
           AND (:date_to = '' OR pb.data_apresentacao <= CAST(:date_to AS DATE))
         ORDER BY pb.data_apresentacao DESC NULLS LAST, pb.id DESC
+        LIMIT :posts_limit
     )
     SELECT
         base.id,
@@ -160,6 +162,7 @@ def _build_dashboard_payload(date_from: str, date_to: str, theme: str) -> tuple[
                 "date_to": date_to,
                 "theme": theme,
                 "preview_limit": _ANALYSIS_PREVIEW_LIMIT,
+                "posts_limit": _POSTS_LIMIT,
             },
         ).fetchall()
         stats_rows = session.execute(_STATS_QUERY).fetchall()

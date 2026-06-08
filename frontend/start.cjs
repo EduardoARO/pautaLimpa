@@ -2,18 +2,19 @@ const { spawn } = require("child_process");
 
 const frontendRoot = __dirname;
 const port = process.env.PORT || "3000";
-const hostname = process.env.HOSTNAME || "0.0.0.0";
+// O Render injeta HOSTNAME com o nome do container; o bind precisa ser 0.0.0.0
+// para o port scan detectar o serviço e evitar 502.
+const hostname = "0.0.0.0";
 const nextCli = require.resolve("next/dist/bin/next");
 
 function run(command, args) {
+  const env = { ...process.env, PORT: port };
+  delete env.HOSTNAME;
+
   const child = spawn(command, args, {
     stdio: "inherit",
     cwd: frontendRoot,
-    env: {
-      ...process.env,
-      HOSTNAME: hostname,
-      PORT: port,
-    },
+    env,
   });
 
   child.on("exit", (code) => {
