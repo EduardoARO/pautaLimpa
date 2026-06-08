@@ -11,10 +11,7 @@ const standaloneServer = path.join(
   "standalone",
   "server.js",
 );
-const nextBinary =
-  process.platform === "win32"
-    ? path.join(frontendRoot, "node_modules", ".bin", "next.cmd")
-    : path.join(frontendRoot, "node_modules", ".bin", "next");
+const nextCli = require.resolve("next/dist/bin/next");
 
 function run(command, args) {
   const child = spawn(command, args, {
@@ -38,7 +35,16 @@ function run(command, args) {
 }
 
 if (existsSync(standaloneServer)) {
+  console.log("[pautalimpa-frontend] iniciando Next standalone");
   run(process.execPath, [standaloneServer]);
 } else {
-  run(nextBinary, ["start", "--hostname", hostname, "--port", port]);
+  console.log("[pautalimpa-frontend] iniciando Next via next start");
+  run(process.execPath, [
+    nextCli,
+    "start",
+    "--hostname",
+    hostname,
+    "--port",
+    port,
+  ]);
 }
