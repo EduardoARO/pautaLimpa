@@ -1,5 +1,7 @@
 # Credenciais e configuração local (NUNCA versionar)
 .env
+.env.local
+.env.*.local
 instagram_session.json
 
 # Logs gerados em runtime

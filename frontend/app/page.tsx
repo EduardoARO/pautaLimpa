@@ -1,6 +1,7 @@
 // @ts-nocheck
 
 import AnalysisCarousel from '../components/analysis-carousel';
+import logoSrc from './logo.png';
 
 const BACKEND_URL = (process.env.BACKEND_URL || process.env.NEXT_PUBLIC_BACKEND_URL || '').replace(/\/$/, '');
 
@@ -141,7 +142,7 @@ export default async function Page({ searchParams }: { searchParams: Record<stri
       <header className="hero">
         <div className="brand">
           <div className="logo-slot">
-            <img src="/logo.png" alt="PautaLimpa" width="64" height="64" />
+            <img src={logoSrc.src} alt="PautaLimpa" width="64" height="64" />
           </div>
           <div>
             <p className="eyebrow">PautaLimpa</p>
